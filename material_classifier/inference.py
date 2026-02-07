@@ -1,10 +1,42 @@
 import argparse
 import csv
+import glob
 import os
 
 import cv2
 import numpy as np
 from tqdm import tqdm
+
+
+def discover_videos(video_dir):
+    """
+    Discover experiment videos in a directory.
+
+    Looks for subdirectories with 4-digit names (e.g., 0797, 0798) containing
+    a video named IMG_XXXX_synched_cropped.mp4.
+
+    Returns sorted list of video paths found.
+    """
+    video_dir = os.path.expanduser(video_dir)
+    pattern = os.path.join(video_dir, "[0-9][0-9][0-9][0-9]")
+    subdirs = sorted(glob.glob(pattern))
+
+    videos = []
+    for subdir in subdirs:
+        dirname = os.path.basename(subdir)
+        if not os.path.isdir(subdir):
+            continue
+        # Look for IMG_XXXX_synched_cropped.mp4
+        video_pattern = os.path.join(subdir, f"IMG_{dirname}_synched_cropped.mp4")
+        matches = glob.glob(video_pattern)
+        if matches:
+            videos.append(matches[0])
+
+    print(f"Discovered {len(videos)} videos in {video_dir}")
+    for v in videos:
+        print(f"  {os.path.relpath(v, video_dir)}")
+
+    return videos
 
 
 def detect_and_track(video_path, output_dir, detector, tracker_params):
@@ -258,7 +290,11 @@ def main():
     parser = argparse.ArgumentParser(description="Material classifier inference")
     parser.add_argument("--detect-and-track", action="store_true",
                         help="Run detection + tracking only (Phase 1)")
-    parser.add_argument("--video", required=True, help="Path to input video")
+    parser.add_argument("--video", default=None, help="Path to input video")
+    parser.add_argument("--video-dir", default=None,
+                        help="Directory containing experiment folders (4-digit names) with videos")
+    parser.add_argument("--overwrite", action=argparse.BooleanOptionalAction, default=True,
+                        help="Overwrite already processed videos (default: True, use --no-overwrite to skip)")
     parser.add_argument("--output-dir", default="tracklets/",
                         help="Output directory for tracklets (detect-and-track mode)")
     parser.add_argument("--model-dir", default="det2_model/",
@@ -276,6 +312,9 @@ def main():
     args = parser.parse_args()
 
     if args.detect_and_track:
+        if not args.video and not args.video_dir:
+            parser.error("--detect-and-track requires either --video or --video-dir")
+
         from material_classifier.tracking.detector import Detectron2Detector
 
         detector = Detectron2Detector(
@@ -290,8 +329,26 @@ def main():
             "delta_t": args.delta_t,
             "inertia": args.inertia,
         }
-        detect_and_track(args.video, args.output_dir, detector, tracker_params)
+
+        if args.video_dir:
+            videos = discover_videos(args.video_dir)
+            if not videos:
+                print("No videos found. Exiting.")
+                return
+
+            for i, video_path in enumerate(videos, 1):
+                video_stem = os.path.splitext(os.path.basename(video_path))[0]
+                output_csv = os.path.join(args.output_dir, video_stem, "tracklet_data.csv")
+                if os.path.exists(output_csv) and not args.overwrite:
+                    print(f"[{i}/{len(videos)}] Skipping {video_stem} (output already exists)")
+                    continue
+                print(f"\n[{i}/{len(videos)}] Processing {video_stem}...")
+                detect_and_track(video_path, args.output_dir, detector, tracker_params)
+        else:
+            detect_and_track(args.video, args.output_dir, detector, tracker_params)
     elif args.checkpoint and args.config:
+        if not args.video:
+            parser.error("Full inference mode requires --video")
         results = full_inference(args.video, args.checkpoint, args.config)
         print(f"\n{'='*60}")
         print(f"Classification Results ({len(results)} tracklets)")
