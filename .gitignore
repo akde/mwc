@@ -1,0 +1,18 @@
+# Model weights
+det2_model/model_best.pth
+
+# Generated outputs
+tracklets/
+features/
+checkpoints/
+logs/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/

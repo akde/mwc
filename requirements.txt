@@ -1,0 +1,12 @@
+torch>=2.1.0
+torchvision>=0.16.0
+numpy
+opencv-python
+Pillow
+pyyaml
+tqdm
+scikit-learn
+matplotlib
+scipy
+# detectron2 must be installed separately:
+# python -m pip install detectron2 -f https://dl.fbaipublicmodels.com/detectron2/wheels/cu118/torch2.1/index.html

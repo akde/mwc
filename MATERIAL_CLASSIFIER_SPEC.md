@@ -2,7 +2,7 @@
 
 ## Overview
 
-Multi-view material classification from conveyor belt RGB video. Objects move along a conveyor under a fixed monocular camera. The temporal axis provides viewpoint diversity, not action dynamics. The goal: classify each object into one of four material classes: **plastic, metal, glass, paper**.
+Multi-view material classification from conveyor belt RGB video. Multiple objects move simultaneously along a conveyor under a fixed monocular camera. The temporal axis provides viewpoint diversity, not action dynamics. Objects are detected per-frame with Detectron2, tracked across frames with OC-SORT to form per-object tracklets, then classified. The goal: classify each tracked object into one of four material classes: **plastic, metal, glass, paper**.
 
 ---
 
@@ -12,13 +12,19 @@ Multi-view material classification from conveyor belt RGB video. Objects move al
 Conveyor Video (.mp4/.avi)
      │
      ▼
-Frame Sampling (every Nth frame or uniform temporal sampling)
+Frame Extraction (every frame)
      │
      ▼
-Object Segmentation (background subtraction or Detectron2)
+Detectron2 Mask R-CNN (frozen, det2_model/) → per-frame detections + masks
      │
      ▼
-Masked Crop + Resize to 518×518
+OC-SORT Tracking → per-object tracklets (track_id persists across frames)
+     │
+     ▼
+Per-tracklet: Masked Crop + Resize to 518×518 (gray fill 128)
+     │
+     ▼
+Per-tracklet: Uniform sample N frames from tracklet
      │
      ▼
 DINOv2 ViT-L/14 (frozen) → [CLS] token per frame → (B, T, 1024)
@@ -39,8 +45,11 @@ material_classifier/
 ├── config/
 │   └── default.yaml              # all hyperparameters and paths
 ├── data/
-│   ├── dataset.py                # VideoMaterialDataset (PyTorch Dataset)
-│   └── preprocessing.py          # frame sampling, segmentation, masking, resizing
+│   ├── dataset.py                # TrackletDataset (PyTorch Dataset)
+│   └── preprocessing.py          # detection, tracking, masking, frame sampling
+├── tracking/
+│   ├── detector.py               # Detectron2 inference wrapper (frozen model)
+│   └── ocsort.py                 # OC-SORT multi-object tracker
 ├── models/
 │   ├── feature_extractor.py      # DINOv2 frozen backbone wrapper
 │   ├── attention_pool.py         # learnable attention pooling module
@@ -57,56 +66,60 @@ material_classifier/
 
 ## Data Format
 
-### Expected directory structure for training data
+### Input videos
+
+Videos contain multiple objects of potentially different classes on the conveyor simultaneously. Videos are stored in a flat directory:
 
 ```
-dataset/
-├── train/
-│   ├── plastic/
-│   │   ├── video_001.mp4
-│   │   ├── video_002.mp4
-│   │   └── ...
-│   ├── metal/
-│   ├── glass/
-│   └── paper/
-├── val/
-│   ├── plastic/
-│   ├── metal/
-│   ├── glass/
-│   └── paper/
-└── test/
-    ├── plastic/
-    ├── metal/
-    ├── glass/
-    └── paper/
+videos/
+├── video_001.mp4
+├── video_002.mp4
+└── ...
 ```
 
-Each video contains one object traversing the conveyor belt. Class is determined by parent folder name.
+### Track labels (manual annotation)
+
+After running detection + tracking, each tracklet is assigned a `track_id`. Labels are provided in a CSV file mapping each tracklet to its material class:
+
+```csv
+video,track_id,split,class
+video_001.mp4,1,train,plastic
+video_001.mp4,2,train,metal
+video_001.mp4,3,val,glass
+video_002.mp4,1,train,paper
+video_002.mp4,2,test,plastic
+```
+
+- `video`: source video filename
+- `track_id`: OC-SORT assigned track ID (persistent across frames for one object)
+- `split`: one of `train`, `val`, `test`
+- `class`: one of `plastic`, `metal`, `glass`, `paper`
 
 ---
 
 ## Module Specifications
 
-### 1. Preprocessing (`data/preprocessing.py`)
+### 1. Detection & Tracking (`tracking/`)
 
-#### Frame Sampling
-- Input: video path → Output: list of PIL Images or numpy arrays
-- Strategy: uniform temporal sampling of `N` frames (default `N=8`)
-- If video has fewer than N frames, use all frames (no padding)
-- If video has more than N frames, sample uniformly spaced indices: `np.linspace(0, total_frames-1, N).astype(int)`
+#### Detectron2 Detection (`tracking/detector.py`)
+- Pre-trained Detectron2 Mask R-CNN model at `det2_model/` (config.yaml + model_best.pth)
+- **Frozen — not trained further.** Load and run inference only.
+- Produces per-frame: bounding boxes, instance masks, confidence scores
+- Multiple detections per frame (multiple objects on conveyor simultaneously)
 
-#### Object Segmentation — Two modes, selectable via config
+#### OC-SORT Tracking (`tracking/ocsort.py`)
+- Associates detections across frames into persistent tracklets using OC-SORT
+- Each tracklet has a unique `track_id` that persists across the object's lifetime
+- Uses IoU + observation-centric momentum for association
+- Reference implementation: `/home/akde/phd/spatio_temporal_alignment/object_tracker_ocsort.py`
 
-**Mode A: Simple background subtraction (default, preferred for single-object controlled environments)**
-- Compute median frame across the entire video as background model (or accept a precomputed background image)
-- Absolute difference between each frame and background → grayscale → threshold (Otsu) → morphological close (kernel=15) → largest connected component → binary mask
-- Use OpenCV only. No deep learning dependency.
+### 2. Preprocessing (`data/preprocessing.py`)
 
-**Mode B: Detectron2 instance segmentation (for multi-object or cluttered scenes)**
-- Use Detectron2 Mask R-CNN with ResNet-50 FPN backbone
-- Pretrained on COCO. Fine-tune on domain data if available.
-- Take the highest-confidence detection mask per frame
-- Fallback: if no detection, use the full frame (log a warning)
+#### Per-Tracklet Frame Sampling
+- Input: tracklet (all frames where a specific track_id was detected)
+- Strategy: uniform temporal sampling of `N` frames (default `N=8`) from the tracklet
+- If tracklet has fewer than N frames, use all frames (no padding)
+- If tracklet has more than N frames, sample uniformly spaced indices: `np.linspace(0, total_frames-1, N).astype(int)`
 
 #### Masked Crop
 - Apply binary mask: `masked = frame * mask[..., None] + (1 - mask[..., None]) * 128`
@@ -117,7 +130,7 @@ Each video contains one object traversing the conveyor belt. Class is determined
 
 ---
 
-### 2. Feature Extractor (`models/feature_extractor.py`)
+### 3. Feature Extractor (`models/feature_extractor.py`)
 
 ```python
 import torch
@@ -145,7 +158,7 @@ class DINOv2Extractor(nn.Module):
 
 ---
 
-### 3. Attention Pooling (`models/attention_pool.py`)
+### 4. Attention Pooling (`models/attention_pool.py`)
 
 ```python
 import torch
@@ -178,7 +191,7 @@ class AttentionPool(nn.Module):
 
 ---
 
-### 4. MLP Classifier Head (`models/classifier.py`)
+### 5. MLP Classifier Head (`models/classifier.py`)
 
 ```python
 import torch.nn as nn
@@ -206,7 +219,7 @@ class MLPHead(nn.Module):
 
 ---
 
-### 5. Full Pipeline (`models/pipeline.py`)
+### 6. Full Pipeline (`models/pipeline.py`)
 
 ```python
 class MaterialClassifier(nn.Module):
@@ -237,11 +250,22 @@ class MaterialClassifier(nn.Module):
 ```yaml
 # config/default.yaml
 data:
-  dataset_root: "./dataset"
-  num_frames: 8                    # frames sampled per video
+  videos_dir: "./videos"
+  labels_csv: "./labels.csv"       # manual track labels (video, track_id, split, class)
+  num_frames: 8                    # frames sampled per tracklet
   image_size: 518                  # DINOv2 native resolution
-  segmentation_mode: "background_subtraction"  # or "detectron2"
-  background_image: null           # path to precomputed background (optional)
+
+detection:
+  det2_model_dir: "./det2_model"   # config.yaml + model_best.pth
+  confidence_threshold: 0.3
+
+tracking:
+  tracker: "ocsort"
+  iou_threshold: 0.3
+  max_frames_missing: 40
+  delta_t: 3
+  inertia: 0.2
+  min_hits: 3
 
 model:
   backbone: "dinov2_vitl14"        # dinov2_vits14, dinov2_vitb14, dinov2_vitl14
@@ -321,8 +345,9 @@ def collate_fn(batch):
 
 ### Inference (`inference.py`)
 - Input: single video file path
-- Output: predicted material class + confidence score + attention weights per frame
-- Optionally visualize which frames received highest attention (useful for interpretability in thesis)
+- Output: per-object predicted material class + confidence score + attention weights per frame
+- Runs full pipeline: Detectron2 detection → OC-SORT tracking → per-tracklet classification
+- Optionally visualize which frames received highest attention per tracklet (useful for interpretability in thesis)
 
 ---
 
@@ -339,10 +364,6 @@ pyyaml
 tqdm
 scikit-learn
 matplotlib
-```
-
-Optional (only if using Detectron2 segmentation mode):
-```
 detectron2  # install via: python -m pip install detectron2 -f https://dl.fbaipublicmodels.com/detectron2/wheels/cu118/torch2.1/index.html
 ```
 
@@ -356,13 +377,14 @@ detectron2  # install via: python -m pip install detectron2 -f https://dl.fbaipu
 
 3. **Neutral gray (128) fill for masked regions**, not black (0). Black pixels at DINOv2's normalization become non-zero values that contaminate features. Gray is closer to the normalized mean and is thus more neutral.
 
-4. **Segmentation failures**: if the background subtraction or Detectron2 fails to find an object in a frame, skip that frame entirely rather than using the full frame. A clean subset of frames is better than a contaminated full set.
+4. **Detection failures**: if Detectron2 finds no detection for a tracked object in a frame (track gap), that frame is naturally absent from the tracklet. OC-SORT handles this via its lost-track mechanism. Do not interpolate or hallucinate masks for missing frames.
 
 5. **Feature caching optimization**: since DINOv2 is frozen, you can precompute and cache all `[CLS]` features to disk during a one-time preprocessing pass, then train the attention pool + MLP on cached features without loading DINOv2 at all during training. This dramatically speeds up training iteration.
 
 ```python
-# Precompute and save features
-# features/train/plastic/video_001.pt → tensor of shape (T, 1024)
+# Precompute and save features per tracklet
+# features/video_001_track_1.pt → tensor of shape (T, 1024)
+# features/video_001_track_2.pt → tensor of shape (T, 1024)
 ```
 
 6. **Reproducibility**: set random seeds for `torch`, `numpy`, `random`, and use `torch.backends.cudnn.deterministic = True`.
