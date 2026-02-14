@@ -55,11 +55,12 @@ material_classifier/
 │   ├── attention_pool.py         # learnable attention pooling module
 │   ├── classifier.py             # MLP classification head
 │   └── pipeline.py               # full model: extractor + pool + head
-├── train.py                      # training loop
-├── evaluate.py                   # evaluation + metrics
-├── inference.py                  # single video inference
-├── requirements.txt
-└── README.md
+├── train.py                      # feature caching + training loop
+├── evaluate.py                   # evaluation metrics + confusion matrix
+├── inference.py                  # detect-and-track (single/batch) + full inference
+├── label.py                      # interactive tracklet labeling tool (OpenCV GUI)
+├── visualize.py                  # tracklet overlay visualization on video
+└── analyze_gaps.py               # detection gap analysis + frame extraction
 ```
 
 ---
@@ -111,6 +112,9 @@ video_002.mp4,2,test,plastic
 - Associates detections across frames into persistent tracklets using OC-SORT
 - Each tracklet has a unique `track_id` that persists across the object's lifetime
 - Uses IoU + observation-centric momentum for association
+- **Observation-Centric Recovery (OCR):** Second association pass re-matches remaining unmatched detections against unmatched trackers using their last observed position (not Kalman prediction), recovering tracks where prediction drifted
+- **Duplicate detection suppression:** Before spawning new tracks, discards unmatched detections that overlap (IoU >= `merge_iou_threshold`) with already-matched tracks — prevents NMS failures from creating competing tracks
+- **Track merging:** After each frame, checks all pairs of recently-updated tracks for IoU overlap; merges pairs that maintain overlap >= `merge_iou_threshold` for `merge_patience` consecutive frames (older track ID kept)
 - Reference implementation: `/home/akde/phd/spatio_temporal_alignment/object_tracker_ocsort.py`
 
 ### 2. Preprocessing (`data/preprocessing.py`)
@@ -252,20 +256,24 @@ class MaterialClassifier(nn.Module):
 data:
   videos_dir: "./videos"
   labels_csv: "./labels.csv"       # manual track labels (video, track_id, split, class)
+  tracklets_dir: "./tracklets"     # detect-and-track output directory
+  features_dir: "./features"       # cached DINOv2 features
   num_frames: 8                    # frames sampled per tracklet
   image_size: 518                  # DINOv2 native resolution
 
 detection:
-  det2_model_dir: "./det2_model"   # config.yaml + model_best.pth
-  confidence_threshold: 0.3
+  model_dir: "./det2_model"          # config.yaml + model_best.pth
+  confidence_threshold: 0.5
 
 tracking:
-  tracker: "ocsort"
+  det_thresh: 0.3
+  max_age: 60
+  min_hits: 1
   iou_threshold: 0.3
-  max_frames_missing: 40
   delta_t: 3
   inertia: 0.2
-  min_hits: 3
+  merge_iou_threshold: 0.7          # IoU threshold for merging duplicate tracks (0=disable)
+  merge_patience: 3                  # consecutive overlap frames before merging
 
 model:
   backbone: "dinov2_vitl14"        # dinov2_vits14, dinov2_vitb14, dinov2_vitl14
@@ -282,8 +290,11 @@ training:
   scheduler: "cosine"              # cosine annealing to 0
   warmup_epochs: 5
   label_smoothing: 0.1
+  grad_accumulation_steps: 1
+  seed: 42
 
 augmentation:
+  enabled: true
   random_horizontal_flip: true
   color_jitter:
     brightness: 0.2
@@ -291,6 +302,10 @@ augmentation:
     saturation: 0.1
     hue: 0.05
   random_erasing: 0.1              # simulate partial occlusion
+
+output:
+  checkpoint_dir: "./checkpoints"
+  log_dir: "./logs"
 ```
 
 ### Training Details
@@ -344,10 +359,17 @@ def collate_fn(batch):
 - Use `torchmetrics` or `sklearn.metrics`
 
 ### Inference (`inference.py`)
-- Input: single video file path
+
+**Detect-and-track mode (Phase 1):**
+- Input: single video (`--video`) or batch directory (`--video-dir`)
+- Output: per-video `tracklet_data.csv` + binary mask PNGs
+- Batch mode discovers 4-digit subdirs containing `IMG_XXXX_synched_cropped.mp4`
+- Supports `--overwrite` / `--no-overwrite` to skip already-processed videos
+
+**Full inference mode (Phase 2):**
+- Input: single video + trained checkpoint + config YAML
 - Output: per-object predicted material class + confidence score + attention weights per frame
 - Runs full pipeline: Detectron2 detection → OC-SORT tracking → per-tracklet classification
-- Optionally visualize which frames received highest attention per tracklet (useful for interpretability in thesis)
 
 ---
 
@@ -364,6 +386,7 @@ pyyaml
 tqdm
 scikit-learn
 matplotlib
+scipy
 detectron2  # install via: python -m pip install detectron2 -f https://dl.fbaipublicmodels.com/detectron2/wheels/cu118/torch2.1/index.html
 ```
 

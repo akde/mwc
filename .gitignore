@@ -3,6 +3,7 @@ det2_model/model_best.pth
 
 # Generated outputs
 tracklets/
+tracklets_*/
 features/
 checkpoints/
 logs/

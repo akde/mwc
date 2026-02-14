@@ -9,7 +9,8 @@ Multi-view material classification from conveyor belt video. Multiple objects mo
 ```
 Video (.mp4)
   → Detectron2 Mask R-CNN (frozen, det2_model/) → per-frame detections + masks
-  → OC-SORT Tracking → per-object tracklets (persistent track_id)
+  → OC-SORT Tracking (with OCR, duplicate suppression, track merging)
+      → per-object tracklets (persistent track_id)
   → Per-tracklet: Masked Crop + Resize (518x518, gray fill 128)
   → Per-tracklet: Uniform sample N frames
   → DINOv2 ViT-L/14 (frozen) → [CLS] per frame → (B, T, 1024)
@@ -28,7 +29,7 @@ material_classifier/
 │   └── default.yaml              # all hyperparameters and paths
 ├── tracking/
 │   ├── detector.py               # Detectron2 Mask R-CNN inference wrapper
-│   └── ocsort.py                 # OC-SORT multi-object tracker
+│   └── ocsort.py                 # OC-SORT tracker (with OCR + merge + dedup)
 ├── data/
 │   ├── dataset.py                # TrackletDataset, CachedFeatureDataset, collate_fn
 │   └── preprocessing.py          # masking, cropping, frame sampling, augmentation
@@ -41,7 +42,8 @@ material_classifier/
 ├── train.py                      # feature caching + training loop
 ├── evaluate.py                   # evaluation metrics + confusion matrix
 ├── label.py                      # interactive tracklet labeling tool (OpenCV GUI)
-└── visualize.py                  # tracklet overlay visualization on video
+├── visualize.py                  # tracklet overlay visualization on video
+└── analyze_gaps.py               # detection gap analysis + frame extraction
 ```
 
 Other project files:
@@ -73,12 +75,59 @@ python material_classifier/inference.py --detect-and-track \
   --video-dir ~/Downloads/ --no-overwrite
 ```
 
+**Tracker parameters** (all have sensible defaults):
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--confidence-threshold` | 0.3 | Detectron2 detection confidence |
+| `--max-age` | 60 | Frames to keep lost track alive |
+| `--min-hits` | 1 | Min detections before track is reported |
+| `--iou-threshold` | 0.3 | IoU threshold for association |
+| `--delta-t` | 3 | Velocity estimation lookback |
+| `--inertia` | 0.2 | VDC weight for direction consistency |
+| `--merge-iou-threshold` | 0.7 | IoU threshold for merging duplicate tracks (0=disable) |
+| `--merge-patience` | 3 | Consecutive overlap frames before merging |
+
 Output structure per video:
 ```
 tracklets/{video_stem}/
   tracklet_data.csv                    # frame, track_id, x1, y1, x2, y2, score
   masks/frame_{:06d}_track_{}.png      # binary masks (0/255)
 ```
+
+### Gap Analysis
+
+Analyze detection gaps in tracklets and extract missed frames for Detectron2 retraining.
+
+```bash
+# Analyze all experiments
+python material_classifier/analyze_gaps.py \
+  --video-dir ~/Downloads/ --tracklets-dir tracklets/
+
+# Single video, report only (no frame extraction)
+python material_classifier/analyze_gaps.py \
+  --video ~/Downloads/0798/IMG_0798_synched_cropped.mp4 \
+  --tracklets-dir tracklets/ --no-extract
+
+# Analyze specific tracks
+python material_classifier/analyze_gaps.py \
+  --video-dir ~/Downloads/ --tracklets-dir tracklets/ \
+  --tracks 28 45 102
+```
+
+**What it does:**
+- Finds frame gaps within each track's lifetime (frames where detection failed)
+- Extracts midpoint frames from long gaps (most informative for retraining)
+- Filters near-duplicate frames (minimum 5s apart by default)
+- Saves gap analysis CSV and report per video
+
+**Parameters:**
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--min-track-length` | 50 | Ignore tracks shorter than this |
+| `--min-gap-length` | 10 | Only extract from gaps this long |
+| `--min-distance` | 5.0 | Minimum seconds between extracted frames |
+| `--tracks` | all | Specific track IDs to analyze |
+| `--no-extract` | false | Report only, don't extract frames |
 
 ### Labeling
 
@@ -135,12 +184,13 @@ python material_classifier/inference.py \
 
 1. **Detect & track** — run `inference.py --detect-and-track` on all videos
 2. **Review** — run `visualize.py` to inspect tracklets visually
-3. **Label** — run `label.py` to assign material classes interactively
-4. **Split** — run `label.py --assign-splits` for stratified train/val
-5. **Cache features** — run `train.py --cache-features` to precompute DINOv2 [CLS] tokens
-6. **Train** — run `train.py` to train attention pool + MLP head on cached features
-7. **Evaluate** — run `evaluate.py` on test split
-8. **Infer** — run `inference.py --video --checkpoint` for end-to-end prediction
+3. **Analyze gaps** — run `analyze_gaps.py` to find detection failures and extract frames for retraining
+4. **Label** — run `label.py` to assign material classes interactively
+5. **Split** — run `label.py --assign-splits` for stratified train/val
+6. **Cache features** — run `train.py --cache-features` to precompute DINOv2 [CLS] tokens
+7. **Train** — run `train.py` to train attention pool + MLP head on cached features
+8. **Evaluate** — run `evaluate.py` on test split
+9. **Infer** — run `inference.py --video --checkpoint` for end-to-end prediction
 
 ## Data Formats
 
@@ -192,13 +242,15 @@ The `--video-dir` flag in `inference.py` auto-discovers this pattern.
 
 5. **Masked regions filled with neutral gray (128), not black.** Black pixels become non-zero after DINOv2 normalization and contaminate features. Gray is closer to the normalized mean.
 
-6. **Detection gaps are natural.** OC-SORT handles frames where an object is not detected. Do not interpolate or hallucinate masks for missing frames.
+6. **Detection gaps are natural.** OC-SORT handles frames where an object is not detected. Do not interpolate or hallucinate masks for missing frames. Use `analyze_gaps.py` to find and extract gap frames for Detectron2 retraining.
 
-7. **Augmentation is per-frame, applied after masking and cropping** — not before.
+7. **OC-SORT has three deduplication mechanisms:** (a) Observation-Centric Recovery (OCR) — a second association pass using last-observed position instead of Kalman prediction, recovering tracks where prediction drifted; (b) Duplicate detection suppression — discards unmatched detections that overlap with already-matched tracks before spawning new tracks; (c) Track merging — merges tracks that consistently co-exist with high spatial overlap for `merge_patience` consecutive frames.
 
-8. **Feature caching:** Since DINOv2 is frozen, precompute [CLS] features per tracklet to disk and train pool+head on cached features without loading DINOv2. Training uses `CachedMaterialClassifier` (pool+head only, no backbone). Checkpoint saved from `CachedMaterialClassifier` is loaded into `MaterialClassifier` pool+head for inference.
+8. **Augmentation is per-frame, applied after masking and cropping** — not before.
 
-9. **Color space:** Detectron2 works in BGR (OpenCV native). DINOv2 expects RGB. Conversion happens in preprocessing after extracting frames.
+9. **Feature caching:** Since DINOv2 is frozen, precompute [CLS] features per tracklet to disk and train pool+head on cached features without loading DINOv2. Training uses `CachedMaterialClassifier` (pool+head only, no backbone). Checkpoint saved from `CachedMaterialClassifier` is loaded into `MaterialClassifier` pool+head for inference.
+
+10. **Color space:** Detectron2 works in BGR (OpenCV native). DINOv2 expects RGB. Conversion happens in preprocessing after extracting frames.
 
 ## Tech Stack
 
