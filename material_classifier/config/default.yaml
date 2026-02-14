@@ -11,12 +11,14 @@ detection:
   confidence_threshold: 0.5
 
 tracking:
-  det_thresh: 0.5
-  max_age: 40
-  min_hits: 3
+  det_thresh: 0.3
+  max_age: 60
+  min_hits: 1
   iou_threshold: 0.3
   delta_t: 3
   inertia: 0.2
+  merge_iou_threshold: 0.7
+  merge_patience: 3
 
 model:
   backbone: "dinov2_vitl14"

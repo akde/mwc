@@ -346,7 +346,8 @@ class OCSort:
     """OC-SORT Multi-Object Tracker."""
 
     def __init__(self, det_thresh=0.5, max_age=30, min_hits=3,
-                 iou_threshold=0.3, delta_t=3, inertia=0.2):
+                 iou_threshold=0.3, delta_t=3, inertia=0.2,
+                 merge_iou_threshold=0.7, merge_patience=3):
         self.max_age = max_age
         self.min_hits = min_hits
         self.iou_threshold = iou_threshold
@@ -357,7 +358,102 @@ class OCSort:
         self.delta_t = delta_t
         self.inertia = inertia
 
+        self.merge_iou_threshold = merge_iou_threshold
+        self.merge_patience = merge_patience
+        self._merge_counts = {}  # {(id_low, id_high): consecutive_frame_count}
+
         KalmanBoxTracker.count = 0
+
+    def _merge_overlapping_tracks(self):
+        """
+        Merge tracks that consistently co-exist with high spatial overlap.
+
+        After each frame's association, checks all pairs of recently-updated
+        tracks for IoU overlap. If a pair maintains IoU >= merge_iou_threshold
+        for merge_patience consecutive active frames, the newer track is absorbed
+        into the older one (lower ID kept).
+
+        This addresses duplicate detections from the detector (e.g., NMS failures
+        for small objects at frame edges) that create competing tracks for the
+        same physical object.
+
+        Algorithm:
+            1. Collect all tracks updated this frame (time_since_update == 0)
+            2. Compute pairwise IoU between their Kalman state estimates
+            3. For each pair with IoU >= threshold, increment a consecutive counter
+            4. For each pair with IoU < threshold, reset the counter
+            5. When a counter reaches merge_patience, merge the pair:
+               - Keep the track with the lower ID (older, more established)
+               - If the removed track was more recently updated, transfer its
+                 state and mask to the keeper
+               - Remove the newer track from the tracker list
+        """
+        if len(self.trackers) < 2:
+            return
+
+        # Prune stale entries for tracks no longer alive
+        alive_ids = {trk.id for trk in self.trackers}
+        self._merge_counts = {
+            k: v for k, v in self._merge_counts.items()
+            if k[0] in alive_ids and k[1] in alive_ids
+        }
+
+        # Collect tracks that received a detection this frame
+        active = []
+        for trk in self.trackers:
+            if trk.time_since_update == 0:
+                bbox = trk.get_state()[0]
+                active.append((trk, bbox[:4]))
+
+        if len(active) < 2:
+            return
+
+        bboxes = np.array([b for _, b in active])
+        iou_mat = iou_batch(bboxes, bboxes)
+
+        # Track which pairs were checked this frame (to reset absent pairs)
+        checked_pairs = set()
+        to_remove_ids = set()
+
+        for i in range(len(active)):
+            if active[i][0].id in to_remove_ids:
+                continue
+            for j in range(i + 1, len(active)):
+                if active[j][0].id in to_remove_ids:
+                    continue
+
+                trk_i, trk_j = active[i][0], active[j][0]
+                pair_key = (min(trk_i.id, trk_j.id), max(trk_i.id, trk_j.id))
+                checked_pairs.add(pair_key)
+
+                if iou_mat[i, j] >= self.merge_iou_threshold:
+                    self._merge_counts[pair_key] = self._merge_counts.get(pair_key, 0) + 1
+
+                    if self._merge_counts[pair_key] >= self.merge_patience:
+                        # Merge: keep older track (lower ID)
+                        if trk_i.id < trk_j.id:
+                            keeper, removed = trk_i, trk_j
+                        else:
+                            keeper, removed = trk_j, trk_i
+
+                        # Transfer state if removed track has fresher observation
+                        if removed.time_since_update < keeper.time_since_update:
+                            keeper.update(removed.last_observation[:4])
+                            keeper.mask = removed.mask
+
+                        to_remove_ids.add(removed.id)
+                        self._merge_counts.pop(pair_key, None)
+                else:
+                    # IoU dropped — reset consecutive counter
+                    self._merge_counts.pop(pair_key, None)
+
+        if to_remove_ids:
+            self.trackers = [t for t in self.trackers if t.id not in to_remove_ids]
+            # Clean up any merge counts referencing removed tracks
+            self._merge_counts = {
+                k: v for k, v in self._merge_counts.items()
+                if k[0] not in to_remove_ids and k[1] not in to_remove_ids
+            }
 
     def update(self, dets, metadata_list=None):
         """
@@ -415,11 +511,62 @@ class OCSort:
             if metadata_list and det_idx < len(metadata_list):
                 self.trackers[trk_idx].mask = metadata_list[det_idx].get('mask')
 
+        # --- Observation-Centric Recovery (OCR) ---
+        # Second association: re-match remaining unmatched detections against
+        # unmatched trackers using LAST OBSERVATION (not Kalman prediction).
+        # This recovers tracks where Kalman prediction drifted but the object
+        # is still near its last observed position.
+        if len(unmatched_dets) > 0 and len(unmatched_trks) > 0:
+            left_dets = dets[unmatched_dets]
+            left_trks = np.array([self.trackers[t].last_observation for t in unmatched_trks])
+            iou_left = iou_batch(left_dets, left_trks)
+
+            matched_indices_2 = linear_assignment(-(iou_left))
+
+            to_remove_det = []
+            to_remove_trk = []
+            for m in matched_indices_2:
+                det_idx = unmatched_dets[m[0]]
+                trk_idx = unmatched_trks[m[1]]
+                if iou_left[m[0], m[1]] >= self.iou_threshold:
+                    self.trackers[trk_idx].update(dets[det_idx, :4])
+                    if metadata_list and det_idx < len(metadata_list):
+                        self.trackers[trk_idx].mask = metadata_list[det_idx].get('mask')
+                    to_remove_det.append(det_idx)
+                    to_remove_trk.append(trk_idx)
+
+            unmatched_dets = np.array([d for d in unmatched_dets if d not in to_remove_det])
+            unmatched_trks = np.array([t for t in unmatched_trks if t not in to_remove_trk])
+
+        # --- Duplicate Detection Suppression ---
+        # Before creating new tracks, discard unmatched detections that overlap
+        # with already-matched tracks. These are duplicate detections from the
+        # detector (e.g., NMS failures) for the same physical object.
+        if len(unmatched_dets) > 0 and self.merge_iou_threshold > 0:
+            matched_bboxes = []
+            for trk in self.trackers:
+                if trk.time_since_update == 0:  # matched this frame
+                    matched_bboxes.append(trk.last_observation[:4])
+
+            if matched_bboxes:
+                matched_bboxes = np.array(matched_bboxes)
+                dup_dets = dets[unmatched_dets]
+                iou_dup = iou_batch(dup_dets, matched_bboxes)
+
+                keep = []
+                for d_local in range(len(unmatched_dets)):
+                    if np.max(iou_dup[d_local]) < self.merge_iou_threshold:
+                        keep.append(unmatched_dets[d_local])
+                unmatched_dets = np.array(keep, dtype=int) if keep else np.array([], dtype=int)
+
         for i in unmatched_dets:
             trk = KalmanBoxTracker(dets[i, :4], delta_t=self.delta_t)
             if metadata_list and i < len(metadata_list):
                 trk.mask = metadata_list[i].get('mask')
             self.trackers.append(trk)
+
+        # Merge duplicate tracks before generating output
+        self._merge_overlapping_tracks()
 
         ret = []
         i = len(self.trackers)

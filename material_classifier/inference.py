@@ -62,6 +62,8 @@ def detect_and_track(video_path, output_dir, detector, tracker_params):
         iou_threshold=tracker_params.get("iou_threshold", 0.3),
         delta_t=tracker_params.get("delta_t", 3),
         inertia=tracker_params.get("inertia", 0.2),
+        merge_iou_threshold=tracker_params.get("merge_iou_threshold", 0.7),
+        merge_patience=tracker_params.get("merge_patience", 3),
     )
 
     cap = cv2.VideoCapture(video_path)
@@ -201,6 +203,8 @@ def full_inference(video_path, checkpoint_path, config):
         iou_threshold=tracking_cfg["iou_threshold"],
         delta_t=tracking_cfg["delta_t"],
         inertia=tracking_cfg["inertia"],
+        merge_iou_threshold=tracking_cfg.get("merge_iou_threshold", 0.7),
+        merge_patience=tracking_cfg.get("merge_patience", 3),
     )
 
     # Process video: collect per-track frames
@@ -299,12 +303,16 @@ def main():
                         help="Output directory for tracklets (detect-and-track mode)")
     parser.add_argument("--model-dir", default="det2_model/",
                         help="Detectron2 model directory")
-    parser.add_argument("--confidence-threshold", type=float, default=0.5)
-    parser.add_argument("--max-age", type=int, default=40)
-    parser.add_argument("--min-hits", type=int, default=3)
+    parser.add_argument("--confidence-threshold", type=float, default=0.3)
+    parser.add_argument("--max-age", type=int, default=60)
+    parser.add_argument("--min-hits", type=int, default=1)
     parser.add_argument("--iou-threshold", type=float, default=0.3)
     parser.add_argument("--delta-t", type=int, default=3)
     parser.add_argument("--inertia", type=float, default=0.2)
+    parser.add_argument("--merge-iou-threshold", type=float, default=0.7,
+                        help="IoU threshold for merging duplicate tracks (0=disable)")
+    parser.add_argument("--merge-patience", type=int, default=3,
+                        help="Consecutive frames of overlap before merging")
     parser.add_argument("--checkpoint", default=None,
                         help="Path to trained model checkpoint (full inference mode)")
     parser.add_argument("--config", default=None,
@@ -328,6 +336,8 @@ def main():
             "iou_threshold": args.iou_threshold,
             "delta_t": args.delta_t,
             "inertia": args.inertia,
+            "merge_iou_threshold": args.merge_iou_threshold,
+            "merge_patience": args.merge_patience,
         }
 
         if args.video_dir:
