@@ -1,0 +1,56 @@
+data:
+  videos_dir: "./videos"
+  labels_csv: "./labels.csv"
+  tracklets_dir: "./tracklets"
+  features_dir: "./thermal_features"
+  downloads_dir: "~/Downloads"
+  num_frames: 8
+  image_size: 518
+  thermal_shape: [164, 270]
+  colormap: null
+
+detection:
+  model_dir: "./det2_model"
+  confidence_threshold: 0.5
+
+tracking:
+  det_thresh: 0.3
+  max_age: 60
+  min_hits: 1
+  iou_threshold: 0.3
+  delta_t: 3
+  inertia: 0.2
+  merge_iou_threshold: 0.7
+  merge_patience: 3
+
+model:
+  backbone: "dinov2_vitl14"
+  hidden_dim: 256
+  num_classes: 4
+  dropout: 0.3
+  attention_temperature: 1.0
+
+training:
+  batch_size: 8
+  epochs: 20
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+  scheduler: "cosine"
+  warmup_epochs: 5
+  label_smoothing: 0.1
+  grad_accumulation_steps: 1
+  seed: 42
+
+augmentation:
+  enabled: true
+  random_horizontal_flip: true
+  color_jitter:
+    brightness: 0.2
+    contrast: 0.2
+    saturation: 0.0
+    hue: 0.0
+  random_erasing: 0.1
+
+output:
+  checkpoint_dir: "./thermal_checkpoints"
+  log_dir: "./thermal_logs"

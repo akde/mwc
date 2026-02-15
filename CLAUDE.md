@@ -55,7 +55,8 @@ plastic  [  3      7      4    175]
 material_classifier/
 ├── __init__.py
 ├── config/
-│   └── default.yaml              # all hyperparameters and paths
+│   ├── default.yaml              # RGB pipeline hyperparameters and paths
+│   └── thermal.yaml              # thermal pipeline hyperparameters and paths
 ├── tracking/
 │   ├── detector.py               # Detectron2 Mask R-CNN inference wrapper
 │   └── ocsort.py                 # OC-SORT tracker (with OCR + merge + dedup)
@@ -67,6 +68,13 @@ material_classifier/
 │   ├── attention_pool.py         # learnable attention pooling
 │   ├── classifier.py             # MLP classification head
 │   └── pipeline.py               # MaterialClassifier + CachedMaterialClassifier
+├── thermal/
+│   ├── __init__.py
+│   ├── dataset.py                # ThermalTrackletDataset (thermal frames + warped masks)
+│   ├── train.py                  # thermal feature caching + training entry point
+│   ├── evaluate.py               # thermal model evaluation entry point
+│   ├── visualize.py              # thermal overlay video (synced to RGB frame count)
+│   └── utils.py                  # frame matching, homography warping, grayscale conversion
 ├── inference.py                  # detect-and-track (single/batch) + full inference
 ├── train.py                      # feature caching + training loop
 ├── evaluate.py                   # evaluation metrics + confusion matrix
@@ -77,13 +85,18 @@ material_classifier/
 
 Other project files:
 ```
-cross_validate.py                 # 5-fold stratified cross-validation script
+cross_validate.py                 # 5-fold stratified cross-validation (RGB)
+thermal_cross_validate.py         # 5-fold stratified cross-validation (thermal)
 labels.csv                        # 550 tracklet labels (19 videos, 4 classes)
 videos/                           # symlinks to experiment videos in ~/Downloads/
 det2_model/                       # frozen Detectron2 model (config.yaml + model_best.pth)
 tracklets/                        # detect-and-track output (generated, not committed)
-features/                         # cached DINOv2 [CLS] features (generated, not committed)
-checkpoints/                      # trained model weights (generated, not committed)
+features/                         # cached DINOv2 [CLS] features from RGB (generated)
+thermal_features/                 # cached DINOv2 [CLS] features from thermal (generated)
+checkpoints/                      # trained RGB model weights (generated)
+thermal_checkpoints/              # trained thermal model weights (generated)
+thermal_viz/                      # thermal annotated overlay videos (generated)
+thermal_logs/                     # thermal training logs (generated)
 requirements.txt                  # Python dependencies
 MATERIAL_CLASSIFIER_SPEC.md       # authoritative spec (module code, hyperparameters, data formats)
 ```
@@ -188,7 +201,7 @@ python material_classifier/label.py --assign-splits --labels-csv labels.csv
 | `--assign-splits` | false | Assign stratified train/val splits instead of labeling |
 | `--train-ratio` | 0.8 | Train split ratio for `--assign-splits` |
 
-### Visualization
+### Visualization (RGB)
 
 Produces an annotated video with colored mask overlays and track_id labels for review.
 
@@ -198,7 +211,35 @@ python material_classifier/visualize.py \
   --tracklets-dir tracklets/
 ```
 
-### Training
+### Visualization (Thermal)
+
+Produces thermal overlay videos synced to RGB frame count (same frame count and FPS), enabling side-by-side comparison. Iterates over RGB frames, maps each to its thermal counterpart via the frame matching CSV, and warps RGB tracklet masks into thermal space via homography. Holds the last thermal frame for RGB frames without a thermal match.
+
+```bash
+# Single experiment
+python material_classifier/thermal/visualize.py \
+  --experiment 0798 --tracklets-dir tracklets/
+
+# All experiments
+python material_classifier/thermal/visualize.py \
+  --all --tracklets-dir tracklets/
+```
+
+**Parameters:**
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--experiment` | | Experiment ID (e.g. 0798), mutually exclusive with `--all` |
+| `--all` | | Process all experiments with tracklets |
+| `--tracklets-dir` | `tracklets/` | Base tracklets directory |
+| `--video-dir` | `videos/` | Directory with RGB videos (for frame count/FPS) |
+| `--downloads-dir` | `~/Downloads` | Directory containing experiment folders (thermal data) |
+| `--output-dir` | `thermal_viz/` | Output directory |
+| `--alpha` | 0.4 | Mask overlay transparency |
+| `--fps` | 30.0 | Fallback FPS if RGB video unavailable |
+| `--scale` | 3.0 | Upscale factor (thermal is 270x164) |
+| `--colormap` | `inferno` | Colormap: inferno, jet, hot, magma, plasma, viridis, gray |
+
+### Training (RGB)
 
 ```bash
 # Cache DINOv2 features first (one-time), then train
@@ -208,7 +249,17 @@ python material_classifier/train.py --config material_classifier/config/default.
 python material_classifier/train.py --config material_classifier/config/default.yaml --cache-features
 ```
 
-### Evaluation
+### Training (Thermal)
+
+```bash
+# Cache DINOv2 features from thermal frames, then train
+python material_classifier/thermal/train.py --config material_classifier/config/thermal.yaml
+
+# Cache features only
+python material_classifier/thermal/train.py --config material_classifier/config/thermal.yaml --cache-features
+```
+
+### Evaluation (RGB)
 
 ```bash
 python material_classifier/evaluate.py \
@@ -217,11 +268,26 @@ python material_classifier/evaluate.py \
   --split val
 ```
 
-### Cross-Validation
+### Evaluation (Thermal)
+
+```bash
+python material_classifier/thermal/evaluate.py \
+  --config material_classifier/config/thermal.yaml \
+  --checkpoint thermal_checkpoints/best_model.pt \
+  --split val
+```
+
+### Cross-Validation (RGB)
 
 ```bash
 # 5-fold stratified CV (uses cached features, restores original splits when done)
 python cross_validate.py
+```
+
+### Cross-Validation (Thermal)
+
+```bash
+python thermal_cross_validate.py
 ```
 
 ### Full Inference (detect + track + classify)
@@ -235,6 +301,7 @@ python material_classifier/inference.py \
 
 ## Workflow
 
+### RGB Pipeline
 1. **Detect & track** — run `inference.py --detect-and-track` on all videos
 2. **Review** — run `visualize.py` to inspect tracklets visually
 3. **Analyze gaps** — run `analyze_gaps.py` to find detection failures and extract frames for retraining
@@ -245,6 +312,15 @@ python material_classifier/inference.py \
 8. **Evaluate** — run `evaluate.py --split val` on validation split
 9. **Cross-validate** — run `cross_validate.py` for 5-fold stratified CV
 10. **Infer** — run `inference.py --video --checkpoint` for end-to-end prediction
+
+### Thermal Pipeline
+Uses the same tracklets (detection + tracking from RGB) but extracts features from thermal frames instead. Requires per-experiment thermal data: thermal frame PNGs, homography matrix, and RGB-to-thermal frame matching CSV in `~/Downloads/{exp_id}/`.
+
+1. **Cache thermal features** — run `thermal/train.py --cache-features` (warps RGB masks to thermal space via homography)
+2. **Train** — run `thermal/train.py` to train on thermal features
+3. **Evaluate** — run `thermal/evaluate.py --split val`
+4. **Cross-validate** — run `thermal_cross_validate.py`
+5. **Visualize** — run `thermal/visualize.py --all` for overlay videos (synced to RGB frame count)
 
 ## Dataset
 
@@ -273,6 +349,20 @@ IMG_0798_synched_cropped.mp4,2,val,metal
 
 ```
 features/{video_stem}_track_{track_id}.pt  → tensor (T, 1024)
+```
+
+### Cached Thermal Features
+
+```
+thermal_features/{video_stem}_track_{track_id}.pt  → tensor (T, 1024)
+```
+
+### Thermal Experiment Data (per experiment in `~/Downloads/{exp_id}/`)
+
+```
+thermal_frames/FLIR_frame_{:06d}.png    # grayscale thermal PNGs (sparse indices)
+homography_*.joblib                      # 3x3 RGB-to-thermal homography matrix
+frame_matches_*.csv                      # RGB frame index → thermal frame index mapping
 ```
 
 ### Classes (alphabetical, 0-indexed)
