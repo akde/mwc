@@ -220,7 +220,8 @@ def draw_header_footer(montage, track_id, total_frames, current_idx, total_track
     return canvas
 
 
-def label_interactive(video_path: str, tracklets_dir: str, labels_csv: str):
+def label_interactive(video_path: str, tracklets_dir: str, labels_csv: str,
+                      min_track_length: int = 0):
     """Main interactive labeling loop."""
     video_stem = Path(video_path).stem
     video_name = Path(video_path).name
@@ -236,8 +237,18 @@ def label_interactive(video_path: str, tracklets_dir: str, labels_csv: str):
     # Parse tracklets
     print(f"Parsing {csv_path} ...")
     tracks = parse_tracklets_by_track(str(csv_path))
+    total_before_filter = len(tracks)
+
+    # Filter by minimum track length
+    if min_track_length > 0:
+        tracks = {tid: data for tid, data in tracks.items()
+                  if len(data) >= min_track_length}
+        print(f"  Found {total_before_filter} tracks, {len(tracks)} passed "
+              f"min-track-length filter ({min_track_length})")
+    else:
+        print(f"  Found {total_before_filter} tracks")
+
     all_track_ids = sorted(tracks.keys())
-    print(f"  Found {len(all_track_ids)} tracks")
 
     # Load existing labels for resume
     existing_labels = load_existing_labels(labels_csv)
@@ -386,6 +397,8 @@ def main():
                         help="Base tracklets directory (default: tracklets/)")
     parser.add_argument("--labels-csv", default="labels.csv",
                         help="Path to labels CSV (default: labels.csv)")
+    parser.add_argument("--min-track-length", type=int, default=0,
+                        help="Only show tracks with at least this many frames (default: 0, no filter)")
     parser.add_argument("--assign-splits", action="store_true",
                         help="Assign stratified train/val splits to existing labels")
     parser.add_argument("--train-ratio", type=float, default=0.8,
@@ -397,7 +410,8 @@ def main():
     else:
         if not args.video:
             parser.error("--video is required for interactive labeling")
-        label_interactive(args.video, args.tracklets_dir, args.labels_csv)
+        label_interactive(args.video, args.tracklets_dir, args.labels_csv,
+                          min_track_length=args.min_track_length)
 
 
 if __name__ == "__main__":
