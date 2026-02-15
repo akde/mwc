@@ -6,6 +6,8 @@ Multi-view material classification from conveyor belt video. Multiple objects mo
 
 ## Architecture
 
+### Single-Modal (RGB or Thermal)
+
 ```
 Video (.mp4)
   → Detectron2 Mask R-CNN (frozen, det2_model/) → per-frame detections + masks
@@ -20,34 +22,36 @@ Video (.mp4)
 
 ~528K trainable parameters (attention pool + MLP head). Detectron2 and DINOv2 are completely frozen.
 
+### Late Fusion (RGB + Thermal)
+
+```
+RGB cached features (T × 1024)  →  AttentionPool_RGB   → 1024 ─┐
+                                                                 ├─ cat → 2048 → MLP Head → 4-class logits
+Thermal cached features (T × 1024) → AttentionPool_Thermal → 1024 ─┘
+```
+
+~1.05M trainable parameters (two independent attention pools + wider MLP head). DINOv2 frozen; trains on pre-cached features from both modalities.
+
 ## Current Results
 
 **5-Fold Stratified Cross-Validation** on 550 labeled tracklets from 19 experiment videos:
 
-| Metric | Value |
-|--------|-------|
-| Mean Accuracy | **0.9509 +/- 0.0093** |
-| Mean Macro F1 | **0.9507 +/- 0.0110** |
+| Pipeline | Params | Mean Accuracy | Mean Macro F1 | Errors |
+|----------|--------|---------------|---------------|--------|
+| **RGB** | 528K | 0.9509 +/- 0.0093 | **0.9507 +/- 0.0110** | 27 |
+| **Thermal** | 528K | 0.9127 +/- 0.0384 | **0.9056 +/- 0.0405** | 48 |
+| **Late Fusion** | 1.05M | 0.9636 +/- 0.0100 | **0.9602 +/- 0.0136** | 20 |
 
-Per-class (pooled across all folds):
+Per-class F1 (pooled across all folds):
 
-| Class | Precision | Recall | F1 | Count |
-|-------|-----------|--------|----|-------|
-| glass | 0.978 | 0.992 | 0.985 | 132 |
-| metal | 0.921 | 0.977 | 0.948 | 131 |
-| paper | 0.957 | 0.908 | 0.932 | 98 |
-| plastic | 0.951 | 0.926 | 0.938 | 189 |
+| Class | RGB | Thermal | Late Fusion | Count |
+|-------|-----|---------|-------------|-------|
+| glass | 0.985 | 0.970 | 0.992 | 132 |
+| metal | 0.948 | 0.931 | 0.966 | 131 |
+| paper | 0.932 | 0.804 | 0.920 | 98 |
+| plastic | 0.938 | 0.917 | 0.964 | 189 |
 
-Confusion matrix (pooled):
-```
-          glass  metal  paper  plastic
-glass    [131      1      0      0]
-metal    [  0    128      0      3]
-paper    [  0      3     89      6]
-plastic  [  3      7      4    175]
-```
-
-27 misclassifications out of 550. Glass is near-perfect. Most confusion is between plastic/metal/paper.
+Late fusion reduces errors by 26% vs RGB alone. Glass is near-perfect across all modalities. Paper is the hardest class (paper↔plastic confusion persists in all three).
 
 ## Project Structure
 
@@ -56,18 +60,21 @@ material_classifier/
 ├── __init__.py
 ├── config/
 │   ├── default.yaml              # RGB pipeline hyperparameters and paths
-│   └── thermal.yaml              # thermal pipeline hyperparameters and paths
+│   ├── thermal.yaml              # thermal pipeline hyperparameters and paths
+│   └── fused.yaml                # late fusion pipeline hyperparameters and paths
 ├── tracking/
 │   ├── detector.py               # Detectron2 Mask R-CNN inference wrapper
 │   └── ocsort.py                 # OC-SORT tracker (with OCR + merge + dedup)
 ├── data/
 │   ├── dataset.py                # TrackletDataset, CachedFeatureDataset, collate_fn
+│   ├── fused_dataset.py          # FusedCachedFeatureDataset, fused_collate_fn
 │   └── preprocessing.py          # masking, cropping, frame sampling, augmentation
 ├── models/
 │   ├── feature_extractor.py      # DINOv2 frozen backbone wrapper
 │   ├── attention_pool.py         # learnable attention pooling
 │   ├── classifier.py             # MLP classification head
-│   └── pipeline.py               # MaterialClassifier + CachedMaterialClassifier
+│   ├── pipeline.py               # MaterialClassifier + CachedMaterialClassifier
+│   └── fused_pipeline.py         # FusedCachedMaterialClassifier (late fusion)
 ├── thermal/
 │   ├── __init__.py
 │   ├── dataset.py                # ThermalTrackletDataset (thermal frames + warped masks)
@@ -87,6 +94,8 @@ Other project files:
 ```
 cross_validate.py                 # 5-fold stratified cross-validation (RGB)
 thermal_cross_validate.py         # 5-fold stratified cross-validation (thermal)
+fused_cross_validate.py           # 5-fold stratified cross-validation (late fusion)
+fused_train.py                    # late fusion training entry point
 labels.csv                        # 550 tracklet labels (19 videos, 4 classes)
 videos/                           # symlinks to experiment videos in ~/Downloads/
 det2_model/                       # frozen Detectron2 model (config.yaml + model_best.pth)
@@ -95,8 +104,11 @@ features/                         # cached DINOv2 [CLS] features from RGB (gener
 thermal_features/                 # cached DINOv2 [CLS] features from thermal (generated)
 checkpoints/                      # trained RGB model weights (generated)
 thermal_checkpoints/              # trained thermal model weights (generated)
+fused_checkpoints/                # trained late fusion model weights (generated)
 thermal_viz/                      # thermal annotated overlay videos (generated)
 thermal_logs/                     # thermal training logs (generated)
+fused_logs/                       # late fusion training logs (generated)
+classification_report.tex         # LaTeX report (RGB, thermal, fusion comparison)
 requirements.txt                  # Python dependencies
 MATERIAL_CLASSIFIER_SPEC.md       # authoritative spec (module code, hyperparameters, data formats)
 ```
@@ -259,6 +271,13 @@ python material_classifier/thermal/train.py --config material_classifier/config/
 python material_classifier/thermal/train.py --config material_classifier/config/thermal.yaml --cache-features
 ```
 
+### Training (Late Fusion)
+
+```bash
+# Requires pre-cached RGB and thermal features
+python fused_train.py --config material_classifier/config/fused.yaml
+```
+
 ### Evaluation (RGB)
 
 ```bash
@@ -288,6 +307,12 @@ python cross_validate.py
 
 ```bash
 python thermal_cross_validate.py
+```
+
+### Cross-Validation (Late Fusion)
+
+```bash
+python fused_cross_validate.py
 ```
 
 ### Full Inference (detect + track + classify)
@@ -321,6 +346,14 @@ Uses the same tracklets (detection + tracking from RGB) but extracts features fr
 3. **Evaluate** — run `thermal/evaluate.py --split val`
 4. **Cross-validate** — run `thermal_cross_validate.py`
 5. **Visualize** — run `thermal/visualize.py --all` for overlay videos (synced to RGB frame count)
+
+### Late Fusion Pipeline
+Combines pre-cached RGB and thermal features via modality-specific attention pools + shared MLP head. Requires both RGB and thermal features to be cached first.
+
+1. **Cache RGB features** — run `train.py --cache-features` (if not already done)
+2. **Cache thermal features** — run `thermal/train.py --cache-features` (if not already done)
+3. **Train** — run `fused_train.py` to train fusion model on both feature sets
+4. **Cross-validate** — run `fused_cross_validate.py`
 
 ## Dataset
 
@@ -406,7 +439,7 @@ The `--video-dir` flag in `inference.py` auto-discovers this pattern. The `video
 
 8. **Augmentation is per-frame, applied after masking and cropping** — not before.
 
-9. **Feature caching:** Since DINOv2 is frozen, precompute [CLS] features per tracklet to disk and train pool+head on cached features without loading DINOv2. Training uses `CachedMaterialClassifier` (pool+head only, no backbone). Checkpoint saved from `CachedMaterialClassifier` is loaded into `MaterialClassifier` pool+head for inference.
+9. **Feature caching:** Since DINOv2 is frozen, precompute [CLS] features per tracklet to disk and train pool+head on cached features without loading DINOv2. Training uses `CachedMaterialClassifier` (pool+head only, no backbone) or `FusedCachedMaterialClassifier` (two pools + wider MLP head) for late fusion. Checkpoint saved from `CachedMaterialClassifier` is loaded into `MaterialClassifier` pool+head for inference.
 
 10. **Color space:** Detectron2 works in BGR (OpenCV native). DINOv2 expects RGB. Conversion happens in preprocessing after extracting frames.
 

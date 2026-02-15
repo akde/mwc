@@ -44,9 +44,12 @@ MLP Head → 4-class softmax → {plastic, metal, glass, paper}
 material_classifier/
 ├── __init__.py
 ├── config/
-│   └── default.yaml              # all hyperparameters and paths
+│   ├── default.yaml              # RGB pipeline hyperparameters and paths
+│   ├── thermal.yaml              # thermal pipeline hyperparameters and paths
+│   └── fused.yaml                # late fusion pipeline hyperparameters and paths
 ├── data/
 │   ├── dataset.py                # TrackletDataset, CachedFeatureDataset, collate_fn
+│   ├── fused_dataset.py          # FusedCachedFeatureDataset, fused_collate_fn
 │   └── preprocessing.py          # masking, cropping, frame sampling, augmentation
 ├── tracking/
 │   ├── detector.py               # Detectron2 inference wrapper (frozen model)
@@ -55,7 +58,15 @@ material_classifier/
 │   ├── feature_extractor.py      # DINOv2 frozen backbone wrapper
 │   ├── attention_pool.py         # learnable attention pooling module
 │   ├── classifier.py             # MLP classification head
-│   └── pipeline.py               # MaterialClassifier + CachedMaterialClassifier
+│   ├── pipeline.py               # MaterialClassifier + CachedMaterialClassifier
+│   └── fused_pipeline.py         # FusedCachedMaterialClassifier (late fusion)
+├── thermal/
+│   ├── __init__.py
+│   ├── dataset.py                # ThermalTrackletDataset (thermal frames + warped masks)
+│   ├── train.py                  # thermal feature caching + training entry point
+│   ├── evaluate.py               # thermal model evaluation entry point
+│   ├── visualize.py              # thermal overlay video (synced to RGB frame count)
+│   └── utils.py                  # frame matching, homography warping, grayscale conversion
 ├── train.py                      # feature caching + training loop
 ├── evaluate.py                   # evaluation metrics + confusion matrix
 ├── inference.py                  # detect-and-track (single/batch) + full inference
@@ -63,7 +74,10 @@ material_classifier/
 ├── visualize.py                  # tracklet overlay visualization on video
 └── analyze_gaps.py               # detection gap analysis + frame extraction
 
-cross_validate.py                 # 5-fold stratified cross-validation script
+cross_validate.py                 # 5-fold stratified cross-validation (RGB)
+thermal_cross_validate.py         # 5-fold stratified cross-validation (thermal)
+fused_cross_validate.py           # 5-fold stratified cross-validation (late fusion)
+fused_train.py                    # late fusion training entry point
 labels.csv                        # 550 tracklet labels (19 videos, 4 classes)
 videos/                           # symlinks to experiment videos in ~/Downloads/
 ```
@@ -252,6 +266,32 @@ class MaterialClassifier(nn.Module):
 
 ---
 
+### 7. Late Fusion Pipeline (`models/fused_pipeline.py`)
+
+```python
+class FusedCachedMaterialClassifier(nn.Module):
+    def __init__(self, feat_dim=1024, hidden_dim=256,
+                 num_classes=4, dropout=0.3, temperature=1.0):
+        super().__init__()
+        self.rgb_pool = AttentionPool(feat_dim, temperature)
+        self.thermal_pool = AttentionPool(feat_dim, temperature)
+        self.head = MLPHead(feat_dim * 2, hidden_dim, num_classes, dropout)
+
+    def forward(self, rgb_features, rgb_mask, thermal_features, thermal_mask):
+        rgb_pooled = self.rgb_pool(rgb_features, rgb_mask)           # (B, D)
+        thermal_pooled = self.thermal_pool(thermal_features, thermal_mask)  # (B, D)
+        fused = torch.cat([rgb_pooled, thermal_pooled], dim=1)       # (B, 2*D)
+        return self.head(fused)                                       # (B, num_classes)
+```
+
+- Two independent attention pools (one per modality) with modality-specific temporal weighting
+- Concatenation fusion: RGB (1024) + Thermal (1024) → 2048-dim input to MLP head
+- MLP head input dimension doubles from 1024 to 2048
+- **~1.05M trainable parameters** (2× attention pools + wider MLP head, 0.35% of backbone)
+- Trains on pre-cached features from both modalities — no DINOv2 loaded during training
+
+---
+
 ## Training Specification
 
 ### Hyperparameters (defaults)
@@ -361,19 +401,20 @@ def collate_fn(batch):
 
 **5-Fold Stratified Cross-Validation** on 550 labeled tracklets from 19 experiment videos:
 
-| Metric | Value |
-|--------|-------|
-| Mean Accuracy | **0.9509 +/- 0.0093** |
-| Mean Macro F1 | **0.9507 +/- 0.0110** |
+| Pipeline | Params | Mean Accuracy | Mean Macro F1 | Errors |
+|----------|--------|---------------|---------------|--------|
+| **RGB** | 528K | 0.9509 +/- 0.0093 | **0.9507 +/- 0.0110** | 27 |
+| **Thermal** | 528K | 0.9127 +/- 0.0384 | **0.9056 +/- 0.0405** | 48 |
+| **Late Fusion** | 1.05M | 0.9636 +/- 0.0100 | **0.9602 +/- 0.0136** | 20 |
 
-Per-class (pooled across all folds):
+Per-class F1 (pooled across all folds):
 
-| Class | Precision | Recall | F1 | Count |
-|-------|-----------|--------|----|-------|
-| glass | 0.978 | 0.992 | 0.985 | 132 |
-| metal | 0.921 | 0.977 | 0.948 | 131 |
-| paper | 0.957 | 0.908 | 0.932 | 98 |
-| plastic | 0.951 | 0.926 | 0.938 | 189 |
+| Class | RGB | Thermal | Late Fusion | Count |
+|-------|-----|---------|-------------|-------|
+| glass | 0.985 | 0.970 | 0.992 | 132 |
+| metal | 0.948 | 0.931 | 0.966 | 131 |
+| paper | 0.932 | 0.804 | 0.920 | 98 |
+| plastic | 0.938 | 0.917 | 0.964 | 189 |
 
 ### Metrics
 - **Primary**: Accuracy, Macro F1-Score (handles class imbalance)

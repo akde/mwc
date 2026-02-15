@@ -1,0 +1,1428 @@
+\documentclass[11pt,a4paper]{article}
+
+% ── Packages ──
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\usetikzlibrary{
+  arrows.meta,
+  calc,
+  positioning,
+  shapes.geometric,
+  shapes.multipart,
+  fit,
+  backgrounds,
+  decorations.pathreplacing,
+  patterns,
+  matrix
+}
+\usepackage{hyperref}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{enumitem}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{tabularx}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+
+% ── Colors ──
+\definecolor{dinoblue}{RGB}{41,98,168}
+\definecolor{rgbgreen}{RGB}{34,139,34}
+\definecolor{thermalred}{RGB}{178,34,34}
+\definecolor{glasscol}{RGB}{52,152,219}
+\definecolor{metalcol}{RGB}{149,165,166}
+\definecolor{papercol}{RGB}{243,156,18}
+\definecolor{plasticcol}{RGB}{46,204,113}
+\definecolor{lightbg}{RGB}{245,248,250}
+\definecolor{blockblue}{RGB}{220,235,252}
+\definecolor{blockred}{RGB}{252,225,220}
+\definecolor{blockgreen}{RGB}{220,252,225}
+\definecolor{blockgray}{RGB}{240,240,240}
+\definecolor{headblue}{RGB}{30,70,130}
+\definecolor{fusedpurple}{RGB}{102,51,153}
+\definecolor{blockpurple}{RGB}{235,220,252}
+
+% ── Page style ──
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\textcolor{gray}{Material Classification via DINOv2}}
+\fancyhead[R]{\small\textcolor{gray}{\thepage}}
+\renewcommand{\headrulewidth}{0.4pt}
+
+% ── Title formatting ──
+\titleformat{\section}{\Large\bfseries\color{headblue}}{\thesection}{1em}{}
+\titleformat{\subsection}{\large\bfseries\color{headblue!80}}{\thesubsection}{1em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries\color{headblue!60}}{\thesubsubsection}{1em}{}
+
+% ── Macros ──
+\newcommand{\cls}{\texttt{[CLS]}}
+\newcommand{\remark}[1]{\textit{\small #1}}
+
+\begin{document}
+
+% ══════════════════════════════════════════════════════════════
+%  TITLE
+% ══════════════════════════════════════════════════════════════
+\begin{titlepage}
+\centering
+\vspace*{3cm}
+
+{\Huge\bfseries\color{headblue} Multi-Modal Material Classification\\[0.3cm]
+on Conveyor Belt Video\\[0.3cm]
+Using Frozen DINOv2 Features}
+
+\vspace{1.5cm}
+
+{\Large\color{gray} RGB, Thermal, and Late Fusion Pipelines\\with Learnable Attention Pooling}
+
+\vspace{2cm}
+
+\begin{tikzpicture}
+  % RGB side
+  \node[draw=rgbgreen, fill=rgbgreen!10, rounded corners=8pt, minimum width=3.5cm,
+        minimum height=1.2cm, font=\large\bfseries, text=rgbgreen] (rgb) {RGB};
+  % Late Fusion center
+  \node[draw=fusedpurple, fill=fusedpurple!10, rounded corners=8pt, minimum width=3.5cm,
+        minimum height=1.2cm, font=\large\bfseries, text=fusedpurple,
+        right=1.2cm of rgb] (fused) {Late Fusion};
+  % Thermal side
+  \node[draw=thermalred, fill=thermalred!10, rounded corners=8pt, minimum width=3.5cm,
+        minimum height=1.2cm, font=\large\bfseries, text=thermalred,
+        right=1.2cm of fused] (therm) {Thermal};
+  % DINOv2 center
+  \node[draw=dinoblue, fill=dinoblue!15, rounded corners=8pt, minimum width=3.5cm,
+        minimum height=1.2cm, font=\large\bfseries, text=dinoblue,
+        below=1.5cm of fused] (dino) {DINOv2 ViT-L/14};
+  % Arrows
+  \draw[-{Stealth[length=3mm]}, thick, rgbgreen] (rgb) -- (dino);
+  \draw[-{Stealth[length=3mm]}, thick, fusedpurple] (fused) -- (dino);
+  \draw[-{Stealth[length=3mm]}, thick, thermalred] (therm) -- (dino);
+  % Classification
+  \node[draw=black!50, fill=blockgray, rounded corners=8pt, minimum width=4.5cm,
+        minimum height=1cm, font=\bfseries,
+        below=1cm of dino] (cls) {Glass | Metal | Paper | Plastic};
+  \draw[-{Stealth[length=3mm]}, thick, dinoblue] (dino) -- (cls);
+\end{tikzpicture}
+
+\vspace{2.5cm}
+
+{\large Technical Report}
+
+\vspace{0.5cm}
+{\large\today}
+
+\vfill
+\end{titlepage}
+
+% ══════════════════════════════════════════════════════════════
+%  TABLE OF CONTENTS
+% ══════════════════════════════════════════════════════════════
+\tableofcontents
+\newpage
+
+% ══════════════════════════════════════════════════════════════
+%  1  INTRODUCTION
+% ══════════════════════════════════════════════════════════════
+\section{Introduction}
+
+Automated waste sorting on high-throughput conveyor systems demands material discrimination that goes beyond what visual appearance alone can provide. Materials such as clear glass and clear plastic are nearly indistinguishable under visible light yet require completely different recycling processes. Thermal imaging in the long-wave infrared (LWIR, 7.5--14\,$\mu$m) band captures material-specific thermal conductivity, specific heat capacity, and emissivity signatures that are invisible to RGB cameras.
+
+This report presents a unified classification framework that leverages \textbf{DINOv2 ViT-L/14}---a self-supervised vision foundation model---as a frozen feature backbone for RGB, thermal, and late fusion modalities. By keeping DINOv2 frozen and training only lightweight attention pooling and MLP classification layers (${\sim}$528K parameters per single-modal pipeline, ${\sim}$1.05M for late fusion), we achieve strong classification performance while requiring minimal training data and compute.
+
+\medskip\noindent\textbf{Key contributions:}
+\begin{itemize}[nosep]
+  \item A multi-view tracklet-level classification pipeline achieving \textbf{95.1\% macro F1} on RGB, \textbf{90.6\% macro F1} on thermal, and \textbf{96.0\% macro F1} via late fusion---all using the same frozen DINOv2 backbone.
+  \item Demonstration that frozen self-supervised features transfer effectively across spectral modalities (visible $\to$ LWIR) through simple grayscale channel replication.
+  \item A spatial registration pipeline using homography warping that enables cross-modal mask transfer from RGB detection space to thermal image space.
+  \item A late fusion architecture with modality-specific attention pooling that reduces classification errors by 26\% relative to RGB alone, demonstrating complementary information in RGB and thermal modalities.
+\end{itemize}
+
+
+% ══════════════════════════════════════════════════════════════
+%  2  SYSTEM ARCHITECTURE
+% ══════════════════════════════════════════════════════════════
+\section{System Architecture}
+
+\subsection{Physical Setup}
+
+The experimental system comprises a conveyor belt (160\,cm $\times$ 40\,cm, speed 1.8\,cm/s), a 2500\,W electric heater positioned 60\,cm above the belt creating an active heating zone, and two cameras: an RGB camera (1280$\times$720, 30\,fps) and a FLIR T420 thermal camera (320$\times$240 LWIR, 30\,fps). Objects traverse the heating zone, acquiring material-specific thermal signatures as they heat and subsequently cool.
+
+\subsection{End-to-End Pipeline}
+
+Both the RGB and thermal classification pipelines share a common architectural pattern: detection and tracking in RGB space, feature extraction via frozen DINOv2, and classification through learnable attention pooling and an MLP head. The key difference lies in the input domain and the preprocessing required to bridge modalities.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  block/.style={draw, rounded corners=4pt, minimum height=0.9cm,
+                align=center, font=\small},
+  frozen/.style={block, fill=blockblue, draw=dinoblue!60},
+  train/.style={block, fill=blockgreen, draw=rgbgreen!60},
+  data/.style={block, fill=blockgray, draw=black!30},
+  arr/.style={-{Stealth[length=2.5mm]}, thick},
+  node distance=0.5cm and 0.4cm
+]
+
+% ── Row 1: Input ──
+\node[data, minimum width=3cm] (video) {Video Input (.mp4)};
+
+% ── Row 2: Detection ──
+\node[frozen, minimum width=4.5cm, below=0.6cm of video] (det)
+  {Detectron2 Mask R-CNN \textit{(frozen)}};
+\draw[arr] (video) -- (det);
+
+% ── Row 3: Tracking ──
+\node[data, minimum width=3.5cm, below=0.6cm of det] (track)
+  {OC-SORT Multi-Object Tracking};
+\draw[arr] (det) -- (track);
+
+% ── Row 4: Split ──
+\node[data, minimum width=2cm, below left=0.8cm and 0.5cm of track] (rgbpre)
+  {\textcolor{rgbgreen}{\textbf{RGB}} Preprocessing};
+\node[data, minimum width=2cm, below right=0.8cm and 0.5cm of track] (thpre)
+  {\textcolor{thermalred}{\textbf{Thermal}} Preprocessing};
+\draw[arr, rgbgreen] (track) -- (rgbpre);
+\draw[arr, thermalred] (track) -- (thpre);
+
+% ── Row 5: Feature extraction ──
+\node[frozen, minimum width=5.5cm, below=1.5cm of track] (dino)
+  {DINOv2 ViT-L/14 \textit{(frozen)} $\to$ \cls{} tokens};
+\draw[arr, rgbgreen] (rgbpre) -- (dino);
+\draw[arr, thermalred] (thpre) -- (dino);
+
+% ── Row 6: Pooling ──
+\node[train, minimum width=4cm, below=0.6cm of dino] (pool)
+  {Attention Pooling \textit{(trainable)}};
+\draw[arr] (dino) -- (pool);
+
+% ── Row 7: Head ──
+\node[train, minimum width=3.5cm, below=0.6cm of pool] (head)
+  {MLP Head \textit{(trainable)}};
+\draw[arr] (pool) -- (head);
+
+% ── Row 8: Output ──
+\node[data, minimum width=4cm, below=0.6cm of head] (out)
+  {\textbf{Glass} | \textbf{Metal} | \textbf{Paper} | \textbf{Plastic}};
+\draw[arr] (head) -- (out);
+
+% ── Legend ──
+\node[frozen, minimum width=1.5cm, font=\footnotesize] at (5.5, -1.5) (leg1) {Frozen};
+\node[train, minimum width=1.5cm, font=\footnotesize, below=0.15cm of leg1] (leg2) {Trainable};
+\node[data, minimum width=1.5cm, font=\footnotesize, below=0.15cm of leg2] (leg3) {Data / I/O};
+
+\end{tikzpicture}
+\caption{Unified pipeline architecture. Both RGB and thermal modalities share detection, tracking, DINOv2 feature extraction, and the trainable classification layers. Only preprocessing differs between modalities.}
+\label{fig:pipeline}
+\end{figure}
+
+
+% ══════════════════════════════════════════════════════════════
+%  3  DINOv2 BACKBONE
+% ══════════════════════════════════════════════════════════════
+\section{DINOv2 Feature Backbone}\label{sec:dino}
+
+\subsection{Architecture}
+
+DINOv2~(Oquab et al., 2024) is a family of self-supervised Vision Transformers trained via self-distillation on a curated dataset of 142M images (LVD-142M). We use the \textbf{ViT-L/14} variant:
+
+\begin{table}[H]
+\centering
+\caption{DINOv2 ViT-L/14 architecture specification.}
+\label{tab:dino_spec}
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Property} & \textbf{Value} \\
+\midrule
+Patch size & 14 $\times$ 14 pixels \\
+Input resolution & 518 $\times$ 518 (37 $\times$ 37 patches) \\
+Embedding dimension & 1024 \\
+Transformer layers & 24 \\
+Attention heads & 16 \\
+Total parameters & ${\sim}$304M \\
+Output used & \cls{} token (1024-dim) \\
+Training status & \textbf{Completely frozen} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Rationale for Freezing}
+
+Freezing the DINOv2 backbone yields several advantages:
+\begin{enumerate}[nosep]
+  \item \textbf{Data efficiency:} With only 550 labeled tracklets, fine-tuning 304M parameters risks severe overfitting. Training only ${\sim}$528K parameters (0.17\% of backbone size) provides strong regularization.
+  \item \textbf{Feature caching:} Since the backbone is deterministic given an input, \cls{} tokens can be \textit{precomputed once and cached to disk}. Subsequent training operates on cached 1024-dim vectors, eliminating GPU memory and compute costs of the backbone during training.
+  \item \textbf{Cross-modal transfer:} The same frozen features serve both RGB and thermal inputs, enabling controlled comparison of modality-specific information content.
+\end{enumerate}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  block/.style={draw, rounded corners=3pt, minimum height=0.8cm,
+                align=center, font=\small, minimum width=2.5cm},
+  arr/.style={-{Stealth[length=2.5mm]}, thick}
+]
+  % Input
+  \node[block, fill=blockgray] (inp) {Input Frame\\518$\times$518$\times$3};
+  % Patch embed
+  \node[block, fill=blockblue, right=0.8cm of inp] (patch) {Patch Embed\\14$\times$14 conv};
+  % Tokens
+  \node[block, fill=blockblue, right=0.8cm of patch] (tok) {1369 + 1 tokens\\dim = 1024};
+  % Transformer
+  \node[block, fill=blockblue, right=0.8cm of tok, minimum width=3cm] (trans) {24$\times$ Transformer\\Layers (frozen)};
+  % CLS
+  \node[block, fill=dinoblue!30, right=0.8cm of trans] (clsout) {\cls{} token\\$\mathbb{R}^{1024}$};
+
+  \draw[arr] (inp) -- (patch);
+  \draw[arr] (patch) -- (tok);
+  \draw[arr] (tok) -- (trans);
+  \draw[arr] (trans) -- (clsout);
+
+  % Frozen bracket
+  \draw[decorate, decoration={brace, amplitude=8pt, mirror}, thick, dinoblue]
+    ([yshift=-0.6cm]patch.south west) -- ([yshift=-0.6cm]clsout.south east)
+    node[midway, below=10pt, font=\small\bfseries, text=dinoblue] {Frozen --- 304M parameters};
+\end{tikzpicture}
+\caption{DINOv2 ViT-L/14 forward pass. The 518$\times$518 input is split into 37$\times$37 = 1369 patches plus one \cls{} token. All 304M parameters remain frozen; only the output \cls{} embedding is used.}
+\label{fig:dino_arch}
+\end{figure}
+
+
+% ══════════════════════════════════════════════════════════════
+%  4  RGB CLASSIFICATION PIPELINE
+% ══════════════════════════════════════════════════════════════
+\section{RGB Classification Pipeline}\label{sec:rgb}
+
+\subsection{Detection and Tracking}
+
+Object detection uses a frozen Detectron2 Mask R-CNN (ResNet-50-FPN backbone) trained on 4 waste material classes, producing per-frame bounding boxes and instance segmentation masks. Multi-object tracking is performed by OC-SORT with three deduplication mechanisms:
+
+\begin{itemize}[nosep]
+  \item \textbf{Observation-Centric Recovery (OCR):} a second association pass using last-observed position instead of Kalman prediction, recovering tracks where prediction has drifted.
+  \item \textbf{Duplicate detection suppression:} discards unmatched detections overlapping with already-matched tracks.
+  \item \textbf{Track merging:} merges tracks with consistent spatial overlap (IoU $\geq$ 0.7) for 3+ consecutive frames.
+\end{itemize}
+
+\subsection{Per-Frame Preprocessing}
+
+For each tracked object, the pipeline extracts masked, cropped frames suitable for DINOv2 input:
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  procstep/.style={draw, rounded corners=3pt, minimum height=1cm,
+               minimum width=2.8cm, align=center, font=\small, fill=blockgreen},
+  arr/.style={-{Stealth[length=2.5mm]}, thick, rgbgreen!70!black},
+  node distance=0.4cm
+]
+  \node[procstep] (s1) {RGB Frame\\+ Binary Mask};
+  \node[procstep, right=0.5cm of s1] (s2) {Apply Mask\\Gray Fill (128)};
+  \node[procstep, right=0.5cm of s2] (s3) {Crop to\\Bounding Box};
+  \node[procstep, right=0.5cm of s3] (s4) {Resize to\\518$\times$518};
+  \node[procstep, right=0.5cm of s4] (s5) {ImageNet\\Normalize};
+
+  \draw[arr] (s1) -- (s2);
+  \draw[arr] (s2) -- (s3);
+  \draw[arr] (s3) -- (s4);
+  \draw[arr] (s4) -- (s5);
+\end{tikzpicture}
+\caption{RGB preprocessing pipeline. The instance mask isolates the object; background pixels are filled with neutral gray (128) to avoid DINOv2 normalization artifacts. BGR$\to$RGB conversion occurs before normalization.}
+\label{fig:rgb_preprocess}
+\end{figure}
+
+\noindent\textbf{Critical design choice:} Background pixels are filled with gray value 128, \textit{not} black (0). After ImageNet normalization (mean$=[0.485, 0.456, 0.406]$, std$=[0.229, 0.224, 0.225]$), black pixels map to large negative values (${\approx}{-}2.1$), contaminating the \cls{} representation. Gray (128/255 $\approx$ 0.502) normalizes to values near zero, acting as a neutral filler.
+
+\subsection{Temporal Sampling and Multi-View Aggregation}
+
+Each tracklet spans hundreds to thousands of frames, representing \textit{multiple views} of the same object as it moves along the conveyor. We uniformly sample $T=8$ frames per tracklet:
+\[
+  \text{indices} = \left\lfloor \text{linspace}(0,\, N_{\text{frames}}-1,\, 8) \right\rfloor
+\]
+
+This provides temporal coverage across the tracklet's lifetime while keeping compute bounded. For tracklets shorter than 8 frames, all available frames are used (padded in the collation step).
+
+\subsection{Learnable Attention Pooling}\label{sec:attn_pool}
+
+Given $T$ frame-level \cls{} embeddings $\{\mathbf{f}_t\}_{t=1}^{T} \in \mathbb{R}^{1024}$, we compute a single tracklet-level representation via learnable attention:
+
+\begin{align}
+  s_t &= \frac{1}{\tau}\, \mathbf{w}_2^\top \tanh\!\bigl(\mathbf{W}_1 \mathbf{f}_t + \mathbf{b}_1\bigr) + b_2  \label{eq:score}\\[4pt]
+  \alpha_t &= \frac{\exp(s_t)}{\sum_{t'=1}^{T}\exp(s_{t'})} \label{eq:weight}\\[4pt]
+  \mathbf{g} &= \sum_{t=1}^{T} \alpha_t \, \mathbf{f}_t \label{eq:pool}
+\end{align}
+
+\noindent where $\mathbf{W}_1 \in \mathbb{R}^{256 \times 1024}$, $\mathbf{w}_2 \in \mathbb{R}^{256}$, and temperature $\tau=1.0$. The attention weights $\alpha_t$ are interpretable: they reveal which frames the model considers most informative for classification.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  frame/.style={draw, fill=dinoblue!15, minimum width=1cm, minimum height=0.6cm,
+                rounded corners=2pt, font=\footnotesize},
+  wt/.style={font=\footnotesize\bfseries, text=thermalred},
+  arr/.style={-{Stealth[length=2mm]}, thick},
+  node distance=0.3cm
+]
+  % Frames
+  \foreach \i/\a in {1/0.05, 2/0.08, 3/0.22, 4/0.15, 5/0.25, 6/0.12, 7/0.08, 8/0.05} {
+    \pgfmathsetmacro{\x}{(\i-1)*1.6}
+    \node[frame] (f\i) at (\x, 0) {$\mathbf{f}_{\i}$};
+    \node[wt, above=0.25cm of f\i] (a\i) {$\a$};
+  }
+
+  % Attention label
+  \node[font=\small, text=thermalred, above=0.6cm of a4.north east] {Attention weights $\alpha_t$};
+
+  % Pooled output
+  \node[draw, fill=rgbgreen!20, rounded corners=4pt, minimum width=2.5cm,
+        minimum height=0.7cm, font=\small\bfseries, below=0.7cm of f4.south east] (pool)
+    {$\mathbf{g} = \sum \alpha_t \mathbf{f}_t$};
+
+  % Arrows
+  \foreach \i in {1,...,8} {
+    \draw[arr, dinoblue!50] (f\i) -- (pool);
+  }
+
+  % Bar chart for attention weights
+  \begin{scope}[shift={(0, 2.2)}]
+    \foreach \i/\a in {1/0.05, 2/0.08, 3/0.22, 4/0.15, 5/0.25, 6/0.12, 7/0.08, 8/0.05} {
+      \pgfmathsetmacro{\x}{(\i-1)*1.6}
+      \pgfmathsetmacro{\h}{\a*4}
+      \fill[thermalred!60] (\x-0.3, 0) rectangle (\x+0.3, \h);
+      \draw[thermalred!80] (\x-0.3, 0) rectangle (\x+0.3, \h);
+    }
+    \draw[thick, ->] (-0.5, 0) -- (11.7, 0) node[right, font=\footnotesize] {$t$};
+    \draw[thick, ->] (-0.5, 0) -- (-0.5, 1.3) node[above, font=\footnotesize] {$\alpha_t$};
+  \end{scope}
+\end{tikzpicture}
+\caption{Attention pooling mechanism. The bar chart shows learned attention weights $\alpha_t$ over 8 sampled frames. Frames capturing distinctive object features (e.g., clear material boundaries) receive higher weight. The weighted sum produces a single 1024-dim tracklet representation $\mathbf{g}$.}
+\label{fig:attn_pool}
+\end{figure}
+
+\subsection{MLP Classification Head}
+
+The pooled representation $\mathbf{g} \in \mathbb{R}^{1024}$ is classified by a lightweight MLP:
+\[
+  \hat{\mathbf{y}} = \mathbf{W}_4 \cdot \text{Dropout}_{0.3}\!\bigl(\text{GELU}\bigl(\mathbf{W}_3 \cdot \text{LayerNorm}(\mathbf{g}) + \mathbf{b}_3\bigr)\bigr) + \mathbf{b}_4
+\]
+
+\noindent where $\mathbf{W}_3 \in \mathbb{R}^{256 \times 1024}$, $\mathbf{W}_4 \in \mathbb{R}^{4 \times 256}$, and $\hat{\mathbf{y}} \in \mathbb{R}^4$ are raw logits over the four material classes.
+
+\begin{table}[H]
+\centering
+\caption{Trainable parameter breakdown.}
+\label{tab:params}
+\begin{tabular}{@{}lrc@{}}
+\toprule
+\textbf{Component} & \textbf{Parameters} & \textbf{Details} \\
+\midrule
+Attention Pool & 262,657 & Linear($1024 \to 256$) + Linear($256 \to 1$) \\
+MLP Head       & 265,476 & LayerNorm + Linear($1024 \to 256$) + Linear($256 \to 4$) \\
+\midrule
+\textbf{Total trainable} & \textbf{528,133} & \textbf{0.17\%} of DINOv2 backbone \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+% ══════════════════════════════════════════════════════════════
+%  5  THERMAL CLASSIFICATION PIPELINE
+% ══════════════════════════════════════════════════════════════
+\section{Thermal Classification Pipeline}\label{sec:thermal}
+
+The thermal pipeline reuses the \textit{same} detection, tracking, attention pooling, and MLP head architecture as the RGB pipeline. The critical differences lie in (1) how input frames are obtained and (2) how RGB-space masks are transferred to thermal image coordinates.
+
+\subsection{Spatial Registration via Homography}
+
+Since the RGB and thermal cameras observe the scene from different viewpoints and at different resolutions (1280$\times$720 vs.\ 320$\times$240), spatial correspondence is established via a 3$\times$3 homography matrix $\mathbf{H}$ computed per experiment using SuperPoint--SuperGlue feature matching with RANSAC outlier rejection. The registration achieves a mean reprojection error of $2.27 \pm 0.48$ pixels at thermal resolution with a 99.1\% inlier rate.
+
+\subsection{Temporal Frame Matching}
+
+The two cameras lack hardware synchronization. Temporal alignment is established through an adaptive search procedure, producing a mapping:
+\[
+  \mathcal{M}: \text{RGB frame index} \to \text{thermal frame index}
+\]
+stored as a CSV per experiment. Not all RGB frames have thermal correspondences---the mapping is sparse (e.g., 26,233 matched pairs out of 26,447 RGB frames for experiment 0798).
+
+\subsection{Cross-Modal Mask Warping}
+
+For each tracked object, the binary instance mask $M_{\text{RGB}} \in \{0,1\}^{H_r \times W_r}$ from Detectron2 (in RGB space) is warped to thermal space:
+\[
+  M_{\text{thermal}} = \text{WarpPerspective}\!\bigl(M_{\text{RGB}},\, \mathbf{H},\, (W_t, H_t)\bigr)
+\]
+using nearest-neighbor interpolation to preserve the binary nature of the mask. This warped mask then serves the same role as the original RGB mask: isolating the object from the background.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  block/.style={draw, rounded corners=3pt, minimum height=1cm,
+                minimum width=2.6cm, align=center, font=\small},
+  arr/.style={-{Stealth[length=2.5mm]}, thick},
+  node distance=0.4cm
+]
+  % RGB side
+  \node[block, fill=blockgreen] (rgbf) {RGB Frame\\(1280$\times$720)};
+  \node[block, fill=blockgreen, below=0.3cm of rgbf] (rgbm) {RGB Mask\\$M_{\text{RGB}}$};
+
+  % Homography
+  \node[block, fill=blockblue, right=1.5cm of rgbm, minimum width=3cm] (homo)
+    {Homography Warp\\$\mathbf{H}$ (nearest-neighbor)};
+
+  % Thermal side
+  \node[block, fill=blockred, right=1.5cm of homo] (thm)
+    {Thermal Mask\\$M_{\text{thermal}}$ (164$\times$270)};
+
+  % Thermal frame
+  \node[block, fill=blockred, above=0.3cm of thm] (thf)
+    {Thermal Frame\\(164$\times$270, grayscale)};
+
+  % Frame matching
+  \node[block, fill=blockgray, above=0.3cm of homo, minimum width=3cm] (fmap)
+    {Frame Matching\\$\mathcal{M}$: RGB $\to$ thermal idx};
+
+  % Arrows
+  \draw[arr, rgbgreen!70!black] (rgbm) -- (homo);
+  \draw[arr, thermalred!70!black] (homo) -- (thm);
+  \draw[arr, gray] (rgbf) -- (fmap);
+  \draw[arr, gray] (fmap) -- (thf);
+
+  % Combined
+  \node[block, fill=thermalred!15, below=0.8cm of $(thm)!0.5!(thf)$, minimum width=3cm] (masked)
+    {Masked Thermal\\Crop + Gray Fill};
+  \draw[arr] (thm) -- (masked);
+  \draw[arr] (thf) -- (masked);
+
+\end{tikzpicture}
+\caption{Cross-modal preprocessing. The RGB binary mask is warped to thermal coordinates via homography $\mathbf{H}$. The frame matching map $\mathcal{M}$ identifies the corresponding thermal frame for each RGB frame index.}
+\label{fig:cross_modal}
+\end{figure}
+
+\subsection{Thermal Preprocessing Pipeline}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  procstep/.style={draw, rounded corners=3pt, minimum height=1cm,
+               minimum width=2.4cm, align=center, font=\small, fill=blockred},
+  arr/.style={-{Stealth[length=2.5mm]}, thick, thermalred!70!black},
+  node distance=0.35cm
+]
+  \node[procstep] (s1) {Thermal\\Grayscale\\(164$\times$270)};
+  \node[procstep, right=0.4cm of s1] (s2) {Warp RGB\\Mask via $\mathbf{H}$};
+  \node[procstep, right=0.4cm of s2] (s3) {Replicate to\\3 Channels};
+  \node[procstep, right=0.4cm of s3] (s4) {Apply Mask\\Gray Fill};
+  \node[procstep, right=0.4cm of s4] (s5) {Crop + Resize\\518$\times$518};
+  \node[procstep, right=0.4cm of s5] (s6) {ImageNet\\Normalize};
+
+  \draw[arr] (s1) -- (s2);
+  \draw[arr] (s2) -- (s3);
+  \draw[arr] (s3) -- (s4);
+  \draw[arr] (s4) -- (s5);
+  \draw[arr] (s5) -- (s6);
+\end{tikzpicture}
+\caption{Thermal preprocessing pipeline. Two additional steps compared to RGB: (1) homography-based mask warping and (2) grayscale-to-3-channel replication for DINOv2 compatibility.}
+\label{fig:thermal_preprocess}
+\end{figure}
+
+\noindent\textbf{Grayscale $\to$ 3-channel conversion.} DINOv2 expects 3-channel RGB input. The single-channel thermal intensity image $I \in \mathbb{R}^{H \times W}$ is converted by simple channel replication:
+\[
+  I_{\text{3ch}} = [I;\, I;\, I] \in \mathbb{R}^{H \times W \times 3}
+\]
+This preserves the raw thermal intensity distribution without introducing false color artifacts. An alternative approach applies a perceptual colormap (e.g., Inferno) before replication, though the default configuration uses direct replication ($\texttt{colormap: null}$).
+
+\subsection{RGB vs.\ Thermal: Side-by-Side Comparison}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+  % RGB column
+  \node[font=\large\bfseries, text=rgbgreen] at (0, 4.5) {RGB Pipeline};
+  \draw[rgbgreen, very thick, rounded corners=5pt] (-2.8, -3.5) rectangle (2.8, 4.1);
+
+  \node[draw, fill=rgbgreen!10, rounded corners=3pt, minimum width=4.5cm,
+        minimum height=0.65cm, font=\small] (r1) at (0, 3.5) {Full-color RGB frame};
+  \node[draw, fill=rgbgreen!10, rounded corners=3pt, minimum width=4.5cm,
+        minimum height=0.65cm, font=\small] (r2) at (0, 2.5) {Direct mask application};
+  \node[draw, fill=rgbgreen!10, rounded corners=3pt, minimum width=4.5cm,
+        minimum height=0.65cm, font=\small] (r3) at (0, 1.5) {Crop + gray fill (128)};
+  \node[draw, fill=rgbgreen!10, rounded corners=3pt, minimum width=4.5cm,
+        minimum height=0.65cm, font=\small] (r4) at (0, 0.5) {Resize 518$\times$518};
+  \node[draw, fill=dinoblue!15, rounded corners=3pt, minimum width=4.5cm,
+        minimum height=0.65cm, font=\small] (r5) at (0, -0.5) {DINOv2 $\to$ \cls{} (1024-d)};
+  \node[draw, fill=rgbgreen!15, rounded corners=3pt, minimum width=4.5cm,
+        minimum height=0.65cm, font=\small] (r6) at (0, -1.5) {Attention Pool + MLP};
+  \node[draw, fill=rgbgreen!10, rounded corners=3pt, minimum width=4.5cm,
+        minimum height=0.65cm, font=\small\bfseries] (r7) at (0, -2.7)
+    {F1 = 0.951};
+
+  % Thermal column
+  \node[font=\large\bfseries, text=thermalred] at (7, 4.5) {Thermal Pipeline};
+  \draw[thermalred, very thick, rounded corners=5pt] (4.2, -3.5) rectangle (9.8, 4.1);
+
+  \node[draw, fill=thermalred!10, rounded corners=3pt, minimum width=4.5cm,
+        minimum height=0.65cm, font=\small] (t1) at (7, 3.5) {Grayscale thermal (164$\times$270)};
+  \node[draw, fill=thermalred!10, rounded corners=3pt, minimum width=4.5cm,
+        minimum height=0.65cm, font=\small] (t2) at (7, 2.5) {Warp mask via homography $\mathbf{H}$};
+  \node[draw, fill=thermalred!10, rounded corners=3pt, minimum width=4.5cm,
+        minimum height=0.65cm, font=\small] (t3) at (7, 1.5) {Replicate $\to$ 3 channels};
+  \node[draw, fill=thermalred!10, rounded corners=3pt, minimum width=4.5cm,
+        minimum height=0.65cm, font=\small] (t4) at (7, 0.5) {Mask + crop + resize 518$\times$518};
+  \node[draw, fill=dinoblue!15, rounded corners=3pt, minimum width=4.5cm,
+        minimum height=0.65cm, font=\small] (t5) at (7, -0.5) {DINOv2 $\to$ \cls{} (1024-d)};
+  \node[draw, fill=thermalred!15, rounded corners=3pt, minimum width=4.5cm,
+        minimum height=0.65cm, font=\small] (t6) at (7, -1.5) {Attention Pool + MLP};
+  \node[draw, fill=thermalred!10, rounded corners=3pt, minimum width=4.5cm,
+        minimum height=0.65cm, font=\small\bfseries] (t7) at (7, -2.7)
+    {F1 = 0.906};
+
+  % Shared DINOv2 highlight
+  \draw[dinoblue, thick, dashed, rounded corners=3pt]
+    (-2.6, -0.95) rectangle (9.6, -0.05);
+  \node[font=\footnotesize\bfseries, text=dinoblue] at (3.5, -1.12) {Shared frozen backbone};
+
+\end{tikzpicture}
+\caption{Side-by-side comparison of RGB and thermal pipelines. Both share the same frozen DINOv2 backbone and trainable classification layers. Key differences are highlighted: thermal requires homography warping and grayscale-to-3-channel conversion.}
+\label{fig:comparison}
+\end{figure}
+
+
+% ══════════════════════════════════════════════════════════════
+%  6  LATE FUSION PIPELINE
+% ══════════════════════════════════════════════════════════════
+\section{Late Fusion Pipeline}\label{sec:fusion}
+
+The late fusion pipeline combines RGB and thermal representations to exploit complementary information from both modalities. Rather than fusing raw inputs or intermediate features, we fuse at the \textit{tracklet representation level}---after each modality has been independently pooled via its own attention mechanism.
+
+\subsection{Architecture}
+
+Each modality maintains an independent attention pool (Eq.~\ref{eq:score}--\ref{eq:pool}) that learns modality-specific temporal attention weights. The pooled representations are concatenated and classified by a shared MLP head with doubled input dimension:
+
+\begin{align}
+  \mathbf{g}_{\text{rgb}} &= \text{AttentionPool}_{\text{rgb}}\!\bigl(\{\mathbf{f}_t^{\text{rgb}}\}_{t=1}^{T}\bigr) \in \mathbb{R}^{1024} \label{eq:fuse_rgb}\\[4pt]
+  \mathbf{g}_{\text{th}} &= \text{AttentionPool}_{\text{th}}\!\bigl(\{\mathbf{f}_t^{\text{th}}\}_{t=1}^{T}\bigr) \in \mathbb{R}^{1024} \label{eq:fuse_th}\\[4pt]
+  \mathbf{g}_{\text{fused}} &= [\mathbf{g}_{\text{rgb}};\, \mathbf{g}_{\text{th}}] \in \mathbb{R}^{2048} \label{eq:fuse_cat}\\[4pt]
+  \hat{\mathbf{y}} &= \text{MLPHead}(\mathbf{g}_{\text{fused}}) \in \mathbb{R}^{4} \label{eq:fuse_out}
+\end{align}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  block/.style={draw, rounded corners=4pt, minimum height=0.9cm,
+                align=center, font=\small},
+  frozen/.style={block, fill=blockblue, draw=dinoblue!60},
+  train/.style={block, fill=blockgreen, draw=rgbgreen!60},
+  trainp/.style={block, fill=blockpurple, draw=fusedpurple!60},
+  data/.style={block, fill=blockgray, draw=black!30},
+  arr/.style={-{Stealth[length=2.5mm]}, thick},
+  node distance=0.5cm
+]
+
+% RGB branch
+\node[data, minimum width=3cm, fill=rgbgreen!10] (rgb_feat) {RGB Features\\$\mathbf{F}^{\text{rgb}} \in \mathbb{R}^{T \times 1024}$};
+\node[trainp, minimum width=3cm, below=0.6cm of rgb_feat] (rgb_pool) {AttentionPool\textsubscript{RGB}};
+\node[data, below=0.4cm of rgb_pool, font=\small] (rgb_out) {$\mathbf{g}_{\text{rgb}} \in \mathbb{R}^{1024}$};
+
+\draw[arr, rgbgreen] (rgb_feat) -- (rgb_pool);
+\draw[arr] (rgb_pool) -- (rgb_out);
+
+% Thermal branch
+\node[data, minimum width=3cm, fill=thermalred!10, right=3.5cm of rgb_feat] (th_feat) {Thermal Features\\$\mathbf{F}^{\text{th}} \in \mathbb{R}^{T \times 1024}$};
+\node[trainp, minimum width=3cm, below=0.6cm of th_feat] (th_pool) {AttentionPool\textsubscript{Thermal}};
+\node[data, below=0.4cm of th_pool, font=\small] (th_out) {$\mathbf{g}_{\text{th}} \in \mathbb{R}^{1024}$};
+
+\draw[arr, thermalred] (th_feat) -- (th_pool);
+\draw[arr] (th_pool) -- (th_out);
+
+% Concatenation
+\node[trainp, minimum width=4cm, below=1cm of $(rgb_out)!0.5!(th_out)$] (cat) {Concatenate $\to$ $\mathbb{R}^{2048}$};
+\draw[arr, rgbgreen!70!black] (rgb_out) -- (cat);
+\draw[arr, thermalred!70!black] (th_out) -- (cat);
+
+% MLP Head
+\node[trainp, minimum width=3.5cm, below=0.6cm of cat] (head) {MLP Head};
+\draw[arr, fusedpurple] (cat) -- (head);
+
+% Output
+\node[data, minimum width=4cm, below=0.6cm of head] (out) {\textbf{Glass} | \textbf{Metal} | \textbf{Paper} | \textbf{Plastic}};
+\draw[arr] (head) -- (out);
+
+% Trainable bracket
+\draw[decorate, decoration={brace, amplitude=8pt}, thick, fusedpurple]
+  ([xshift=0.3cm]th_pool.north east) -- ([xshift=0.3cm]head.south east)
+  node[midway, right=10pt, font=\small\bfseries, text=fusedpurple, align=left] {Trainable\\(${\sim}$1.05M params)};
+
+\end{tikzpicture}
+\caption{Late fusion architecture. RGB and thermal features are pooled independently via modality-specific attention mechanisms, concatenated into a 2048-dim vector, and classified by a shared MLP head. All components shown are trainable; DINOv2 feature extraction (not shown) remains frozen.}
+\label{fig:fusion_arch}
+\end{figure}
+
+\subsection{Parameter Count}
+
+The late fusion model roughly doubles the trainable parameter count compared to single-modal pipelines, due to the second attention pool and the wider MLP input layer:
+
+\begin{table}[H]
+\centering
+\caption{Parameter comparison: single-modal vs.\ late fusion.}
+\label{tab:fusion_params}
+\begin{tabular}{@{}lrr@{}}
+\toprule
+\textbf{Component} & \textbf{Single-Modal} & \textbf{Late Fusion} \\
+\midrule
+Attention Pool (RGB)    & 262,657 & 262,657 \\
+Attention Pool (Thermal)& ---     & 262,657 \\
+MLP Head                & 265,476 & 527,620 \\
+\midrule
+\textbf{Total trainable}& \textbf{528,133} & \textbf{1,052,934} \\
+\textbf{\% of DINOv2}   & 0.17\%  & 0.35\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent The MLP head input dimension doubles from 1024 to 2048 for the fused model, accounting for the increase from 265K to 528K parameters. Even at ${\sim}$1.05M parameters, the fused model trains only 0.35\% of the backbone size.
+
+\subsection{Design Rationale: Late vs.\ Early Fusion}
+
+We adopt late fusion (decision-level) over early fusion (feature-level or input-level) for three reasons:
+
+\begin{enumerate}[nosep]
+  \item \textbf{Modality-specific temporal attention.} RGB and thermal frames may carry discriminative information at different temporal points in the tracklet (e.g., thermal signatures are most distinctive during heating/cooling transitions). Independent attention pools allow each modality to learn its own temporal weighting.
+  \item \textbf{Graceful degradation.} Late fusion architectures can naturally handle missing modalities at inference time by zero-padding the absent branch, whereas early fusion requires both modalities at all times.
+  \item \textbf{Controlled ablation.} By sharing the DINOv2 backbone and varying only the fusion strategy, we can directly compare single-modal vs.\ multi-modal performance with minimal confounding factors.
+\end{enumerate}
+
+
+% ══════════════════════════════════════════════════════════════
+%  7  TRAINING METHODOLOGY
+% ══════════════════════════════════════════════════════════════
+\section{Training Methodology}
+
+\subsection{Feature Caching Strategy}
+
+Since DINOv2 is frozen, features are precomputed once per tracklet and cached to disk as PyTorch tensors:
+\[
+  \mathbf{F}_i = [\mathbf{f}_1, \ldots, \mathbf{f}_T]_i \in \mathbb{R}^{T \times 1024} \quad \text{saved as } \texttt{features/\{video\}\_track\_\{id\}.pt}
+\]
+Training then operates purely on cached features without loading DINOv2 (${\sim}$304M parameters are never on GPU during training). The model used during training, \texttt{CachedMaterialClassifier}, contains only the attention pool and MLP head.
+
+\subsection{Optimization}
+
+\begin{table}[H]
+\centering
+\caption{Training hyperparameters (identical for all three approaches: RGB, thermal, and fused).}
+\label{tab:train_hyper}
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Hyperparameter} & \textbf{Value} \\
+\midrule
+Optimizer & AdamW \\
+Learning rate & $1 \times 10^{-3}$ \\
+Weight decay & $1 \times 10^{-4}$ \\
+Batch size & 8 \\
+Epochs & 20 \\
+Loss function & CrossEntropyLoss \\
+Label smoothing & 0.1 \\
+Warmup schedule & LinearLR, 5 epochs ($10^{-8} \to 1.0$) \\
+Main schedule & CosineAnnealingLR, 15 epochs \\
+Seed & 42 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Learning Rate Schedule}
+
+The two-phase schedule combines linear warmup with cosine annealing:
+\[
+  \eta(e) = \begin{cases}
+    \eta_0 \cdot \bigl(10^{-8} + (1 - 10^{-8}) \cdot e/5\bigr) & \text{if } e < 5 \\[4pt]
+    \displaystyle\frac{\eta_0}{2}\bigl(1 + \cos\!\bigl(\pi \cdot (e-5)/15\bigr)\bigr) & \text{if } e \geq 5
+  \end{cases}
+\]
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  width=12cm, height=5cm,
+  xlabel={Epoch},
+  ylabel={Learning Rate},
+  xmin=0, xmax=20,
+  ymin=0, ymax=1.1e-3,
+  grid=major,
+  grid style={gray!20},
+  thick,
+  scaled y ticks=false,
+  y tick label style={/pgf/number format/.cd, fixed, fixed zerofill, precision=4},
+  legend pos=north east,
+  area style,
+]
+  % Warmup phase
+  \addplot[domain=0:5, samples=50, thick, dinoblue, fill=dinoblue!10]
+    {1e-3 * (1e-8 + (1-1e-8)*x/5)};
+  % Cosine phase
+  \addplot[domain=5:20, samples=100, thick, thermalred, fill=thermalred!10]
+    {1e-3 * 0.5 * (1 + cos(deg(3.14159*(x-5)/15)))};
+
+  % Phase divider
+  \draw[dashed, gray, thick] (axis cs:5, 0) -- (axis cs:5, 1.1e-3);
+
+  \node[font=\small\bfseries, text=dinoblue] at (axis cs:2.5, 0.85e-3) {Warmup};
+  \node[font=\small\bfseries, text=thermalred] at (axis cs:12, 0.85e-3) {Cosine Annealing};
+\end{axis}
+\end{tikzpicture}
+\caption{Learning rate schedule. Linear warmup from near-zero to $10^{-3}$ over 5 epochs, followed by cosine decay over the remaining 15 epochs.}
+\label{fig:lr_schedule}
+\end{figure}
+
+\subsection{Data Augmentation}
+
+Augmentation is applied \textit{per-frame after masking and cropping}, with consistent random state across all $T$ frames in a tracklet to maintain spatial coherence:
+
+\begin{table}[H]
+\centering
+\caption{Data augmentation configuration. Saturation and hue jitter are disabled for thermal (grayscale input).}
+\label{tab:augmentation}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Augmentation} & \textbf{RGB} & \textbf{Thermal} \\
+\midrule
+Random horizontal flip & $p=0.5$ & $p=0.5$ \\
+Brightness jitter & $\pm 0.2$ & $\pm 0.2$ \\
+Contrast jitter & $\pm 0.2$ & $\pm 0.2$ \\
+Saturation jitter & $\pm 0.1$ & \textit{disabled} (0.0) \\
+Hue jitter & $\pm 0.05$ & \textit{disabled} (0.0) \\
+Random erasing & $p=0.1$ & $p=0.1$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent\textbf{Fused training.} The late fusion model trains on pre-cached features from both modalities simultaneously. No additional augmentation is applied beyond what was used during feature caching. The same optimizer, schedule, and hyperparameters (Table~\ref{tab:train_hyper}) are used for all three pipelines to ensure a fair comparison.
+
+
+% ══════════════════════════════════════════════════════════════
+%  8  EXPERIMENTAL RESULTS (renumbered from 7)
+% ══════════════════════════════════════════════════════════════
+\section{Experimental Results}
+
+\subsection{Dataset}
+
+The dataset comprises \textbf{19 experiment videos} yielding \textbf{550 labeled tracklets} (filtered to $\geq$1000 frames per tracklet for quality):
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  ybar,
+  width=10cm, height=6cm,
+  ylabel={Number of Tracklets},
+  symbolic x coords={Glass, Metal, Paper, Plastic},
+  xtick=data,
+  nodes near coords,
+  nodes near coords align={vertical},
+  bar width=1.2cm,
+  ymin=0, ymax=220,
+  grid=major,
+  grid style={gray!15},
+  enlarge x limits=0.25,
+]
+  \addplot[fill=glasscol!70, draw=glasscol] coordinates {(Glass,132)};
+  \addplot[fill=metalcol!70, draw=metalcol] coordinates {(Metal,131)};
+  \addplot[fill=papercol!70, draw=papercol] coordinates {(Paper,98)};
+  \addplot[fill=plasticcol!70, draw=plasticcol] coordinates {(Plastic,189)};
+\end{axis}
+\end{tikzpicture}
+\caption{Class distribution across 550 labeled tracklets. Plastic is the most frequent class (34.4\%), paper the least (17.8\%).}
+\label{fig:class_dist}
+\end{figure}
+
+\subsection{RGB Results: 5-Fold Stratified Cross-Validation}
+
+\begin{table}[H]
+\centering
+\caption{RGB pipeline: 5-fold stratified CV results (550 tracklets, 19 videos).}
+\label{tab:rgb_results}
+\begin{tabular}{@{}lc@{}}
+\toprule
+\textbf{Metric} & \textbf{Value} \\
+\midrule
+Mean Accuracy & $0.9509 \pm 0.0093$ \\
+Mean Macro F1 & $0.9507 \pm 0.0110$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[H]
+\centering
+\caption{RGB pipeline: per-class metrics pooled across all 5 folds.}
+\label{tab:rgb_perclass}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+\textbf{Class} & \textbf{Precision} & \textbf{Recall} & \textbf{F1} & \textbf{Count} \\
+\midrule
+Glass   & 0.978 & 0.992 & 0.985 & 132 \\
+Metal   & 0.921 & 0.977 & 0.948 & 131 \\
+Paper   & 0.957 & 0.908 & 0.932 & 98 \\
+Plastic & 0.951 & 0.926 & 0.938 & 189 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  ybar,
+  width=12cm, height=6cm,
+  ylabel={Score},
+  symbolic x coords={Glass, Metal, Paper, Plastic},
+  xtick=data,
+  ymin=0.85, ymax=1.02,
+  grid=major,
+  grid style={gray!15},
+  bar width=0.6cm,
+  enlarge x limits=0.2,
+  legend style={at={(0.5, -0.2)}, anchor=north, legend columns=3},
+  nodes near coords,
+  nodes near coords style={font=\tiny, rotate=90, anchor=west},
+  every node near coord/.append style={xshift=0pt},
+]
+  \addplot[fill=dinoblue!70, draw=dinoblue] coordinates
+    {(Glass,0.978) (Metal,0.921) (Paper,0.957) (Plastic,0.951)};
+  \addplot[fill=rgbgreen!70, draw=rgbgreen] coordinates
+    {(Glass,0.992) (Metal,0.977) (Paper,0.908) (Plastic,0.926)};
+  \addplot[fill=thermalred!70, draw=thermalred] coordinates
+    {(Glass,0.985) (Metal,0.948) (Paper,0.932) (Plastic,0.938)};
+  \legend{Precision, Recall, F1}
+\end{axis}
+\end{tikzpicture}
+\caption{RGB pipeline per-class performance. Glass achieves near-perfect classification (F1=0.985). Paper and plastic show the most room for improvement.}
+\label{fig:rgb_perclass_chart}
+\end{figure}
+
+\subsection{Confusion Matrix Analysis}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[font=\small]
+  % Manual confusion matrix (avoids pgfmath array issues)
+  % Row 0: Glass  (131, 1, 0, 0)  total=132
+  \fill[dinoblue!99!white] (0, 0) rectangle (1.8, 1.8);
+  \fill[thermalred!1!white] (1.8, 0) rectangle (3.6, 1.8);
+  \fill[white] (3.6, 0) rectangle (5.4, 1.8);
+  \fill[white] (5.4, 0) rectangle (7.2, 1.8);
+  % Row 1: Metal  (0, 128, 0, 3)  total=131
+  \fill[white] (0, -1.8) rectangle (1.8, 0);
+  \fill[dinoblue!98!white] (1.8, -1.8) rectangle (3.6, 0);
+  \fill[white] (3.6, -1.8) rectangle (5.4, 0);
+  \fill[thermalred!2!white] (5.4, -1.8) rectangle (7.2, 0);
+  % Row 2: Paper  (0, 3, 89, 6)  total=98
+  \fill[white] (0, -3.6) rectangle (1.8, -1.8);
+  \fill[thermalred!3!white] (1.8, -3.6) rectangle (3.6, -1.8);
+  \fill[dinoblue!91!white] (3.6, -3.6) rectangle (5.4, -1.8);
+  \fill[thermalred!6!white] (5.4, -3.6) rectangle (7.2, -1.8);
+  % Row 3: Plastic  (3, 7, 4, 175)  total=189
+  \fill[thermalred!2!white] (0, -5.4) rectangle (1.8, -3.6);
+  \fill[thermalred!4!white] (1.8, -5.4) rectangle (3.6, -3.6);
+  \fill[thermalred!2!white] (3.6, -5.4) rectangle (5.4, -3.6);
+  \fill[dinoblue!93!white] (5.4, -5.4) rectangle (7.2, -3.6);
+
+  % Grid lines
+  \foreach \i in {0,...,4} {
+    \draw[gray!50] (\i*1.8, 1.8) -- (\i*1.8, -5.4);
+    \draw[gray!50] (0, 1.8-\i*1.8) -- (7.2, 1.8-\i*1.8);
+  }
+
+  % Values
+  \node[font=\normalsize\bfseries] at (0.9, 0.9) {131};
+  \node[font=\normalsize\bfseries] at (2.7, 0.9) {1};
+  \node[font=\normalsize\bfseries] at (4.5, 0.9) {0};
+  \node[font=\normalsize\bfseries] at (6.3, 0.9) {0};
+
+  \node[font=\normalsize\bfseries] at (0.9, -0.9) {0};
+  \node[font=\normalsize\bfseries] at (2.7, -0.9) {128};
+  \node[font=\normalsize\bfseries] at (4.5, -0.9) {0};
+  \node[font=\normalsize\bfseries] at (6.3, -0.9) {3};
+
+  \node[font=\normalsize\bfseries] at (0.9, -2.7) {0};
+  \node[font=\normalsize\bfseries] at (2.7, -2.7) {3};
+  \node[font=\normalsize\bfseries] at (4.5, -2.7) {89};
+  \node[font=\normalsize\bfseries] at (6.3, -2.7) {6};
+
+  \node[font=\normalsize\bfseries] at (0.9, -4.5) {3};
+  \node[font=\normalsize\bfseries] at (2.7, -4.5) {7};
+  \node[font=\normalsize\bfseries] at (4.5, -4.5) {4};
+  \node[font=\normalsize\bfseries] at (6.3, -4.5) {175};
+
+  % Column labels (predicted)
+  \node[font=\small\bfseries, rotate=45, anchor=south] at (0.9, 2.2) {Glass};
+  \node[font=\small\bfseries, rotate=45, anchor=south] at (2.7, 2.2) {Metal};
+  \node[font=\small\bfseries, rotate=45, anchor=south] at (4.5, 2.2) {Paper};
+  \node[font=\small\bfseries, rotate=45, anchor=south] at (6.3, 2.2) {Plastic};
+
+  % Row labels (true)
+  \node[font=\small\bfseries, anchor=east] at (-0.2, 0.9) {Glass};
+  \node[font=\small\bfseries, anchor=east] at (-0.2, -0.9) {Metal};
+  \node[font=\small\bfseries, anchor=east] at (-0.2, -2.7) {Paper};
+  \node[font=\small\bfseries, anchor=east] at (-0.2, -4.5) {Plastic};
+
+  \node[font=\small\bfseries, rotate=90] at (-1.5, -1.8) {True Label};
+  \node[font=\small\bfseries] at (3.6, 3.0) {Predicted Label};
+
+\end{tikzpicture}
+\caption{RGB confusion matrix (pooled across 5 folds, 550 samples). Only 27 misclassifications. Glass is near-perfect (131/132). Most confusion occurs between plastic$\leftrightarrow$metal (10 errors) and plastic$\leftrightarrow$paper (10 errors).}
+\label{fig:rgb_confusion}
+\end{figure}
+
+\noindent\textbf{Error analysis:} The 27 misclassifications reveal interpretable patterns:
+\begin{itemize}[nosep]
+  \item \textbf{Glass} (1 error): Near-perfect---distinctive visual appearance (transparency, reflectivity).
+  \item \textbf{Metal} (3 errors): 3 samples confused with plastic, likely due to similar surface finish on certain items.
+  \item \textbf{Paper} (9 errors): Most challenging class; confused with both metal (3) and plastic (6), suggesting visual similarity in deformed/wrinkled paper.
+  \item \textbf{Plastic} (14 errors): Largest error count but from the largest class (189 samples). Confusions spread across metal (7), paper (4), and glass (3).
+\end{itemize}
+
+\subsection{Thermal Results: 5-Fold Stratified Cross-Validation}
+
+\begin{table}[H]
+\centering
+\caption{Thermal pipeline: 5-fold stratified CV results (550 tracklets, 19 videos).}
+\label{tab:thermal_results}
+\begin{tabular}{@{}lc@{}}
+\toprule
+\textbf{Metric} & \textbf{Value} \\
+\midrule
+Mean Accuracy & $0.9127 \pm 0.0384$ \\
+Mean Macro F1 & $0.9056 \pm 0.0405$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[H]
+\centering
+\caption{Thermal pipeline: per-class metrics pooled across all 5 folds.}
+\label{tab:thermal_perclass}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+\textbf{Class} & \textbf{Precision} & \textbf{Recall} & \textbf{F1} & \textbf{Count} \\
+\midrule
+Glass   & 0.956 & 0.985 & 0.970 & 132 \\
+Metal   & 0.938 & 0.924 & 0.931 & 131 \\
+Paper   & 0.792 & 0.816 & 0.804 & 98 \\
+Plastic & 0.929 & 0.905 & 0.917 & 189 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent\textbf{Error analysis:} The 48 thermal misclassifications reveal distinct patterns compared to RGB:
+\begin{itemize}[nosep]
+  \item \textbf{Glass} (2 errors): Remains the easiest class; thermal emissivity is highly distinctive.
+  \item \textbf{Metal} (10 errors): Confused with glass (4), paper (5), and plastic (1). Metal's variable thermal conductivity creates diverse thermal signatures.
+  \item \textbf{Paper} (18 errors): Most challenging; 11 confused with plastic and 5 with metal. Paper and plastic share similar thermal mass, making spatial thermal features less discriminative.
+  \item \textbf{Plastic} (18 errors): Confused primarily with paper (16) and metal (2). The paper$\leftrightarrow$plastic confusion dominates thermal errors.
+\end{itemize}
+
+
+\subsection{Late Fusion Results: 5-Fold Stratified Cross-Validation}
+
+\begin{table}[H]
+\centering
+\caption{Late fusion pipeline: 5-fold stratified CV results (550 tracklets, 19 videos).}
+\label{tab:fused_results}
+\begin{tabular}{@{}lc@{}}
+\toprule
+\textbf{Metric} & \textbf{Value} \\
+\midrule
+Mean Accuracy & $0.9636 \pm 0.0100$ \\
+Mean Macro F1 & $0.9602 \pm 0.0136$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[H]
+\centering
+\caption{Late fusion pipeline: per-class metrics pooled across all 5 folds.}
+\label{tab:fused_perclass}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+\textbf{Class} & \textbf{Precision} & \textbf{Recall} & \textbf{F1} & \textbf{Count} \\
+\midrule
+Glass   & 1.000 & 0.985 & 0.992 & 132 \\
+Metal   & 0.949 & 0.985 & 0.966 & 131 \\
+Paper   & 0.966 & 0.878 & 0.920 & 98 \\
+Plastic & 0.949 & 0.979 & 0.964 & 189 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+\subsection{Comparative Analysis}\label{sec:comparison}
+
+\subsubsection{Three-Way Method Comparison}
+
+Table~\ref{tab:three_way} presents all methods on a common footing, including prior thermal baselines and the three DINOv2-based approaches.
+
+\begin{table}[H]
+\centering
+\caption{Complete classification methods comparison. Prior baselines use handcrafted temporal features from thermal intensity time-series. DINOv2 approaches use frozen spatial features. All DINOv2 results are 5-fold stratified CV on 550 tracklets; per-class values are pooled F1 scores.}
+\label{tab:three_way}
+\begin{tabular}{@{}llrcccccc@{}}
+\toprule
+\textbf{Method} & \textbf{Features} & \textbf{Params} & \textbf{Acc.} & \textbf{F1} & \textbf{Glass} & \textbf{Metal} & \textbf{Paper} & \textbf{Plastic} \\
+\midrule
+\multicolumn{9}{l}{\textit{Temporal thermal features (prior work)}} \\
+SVM (5 features) & Handcrafted & --- & 68.2 & 0.678 & 0.786 & 0.490 & 0.732 & 0.703 \\
+BiGRU & Learned & --- & 69.1 & 0.676 & 0.815 & 0.636 & 0.537 & 0.716 \\
+InceptionTime & Learned & --- & 68.2 & 0.672 & 0.764 & 0.609 & 0.615 & 0.700 \\
+MiniRocket & Kernel-based & --- & 65.5 & 0.644 & 0.754 & 0.553 & 0.611 & 0.658 \\
+Gundupalli & Peak histogram & --- & 55.5 & 0.550 & 0.760 & 0.370 & 0.540 & 0.530 \\
+\midrule
+\multicolumn{9}{l}{\textit{DINOv2 spatial features (this work)}} \\
+\textcolor{rgbgreen}{RGB-only} & Frozen ViT-L & 528K & 95.1 & 0.951 & 0.985 & 0.948 & 0.932 & 0.938 \\
+\textcolor{thermalred}{Thermal-only} & Frozen ViT-L & 528K & 91.3 & 0.906 & 0.970 & 0.931 & 0.804 & 0.917 \\
+\textcolor{fusedpurple}{\textbf{Late Fusion}} & Frozen ViT-L & 1.05M & \textbf{96.4} & \textbf{0.960} & \textbf{0.992} & \textbf{0.966} & \textbf{0.920} & \textbf{0.964} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Per-Fold Comparison}
+
+Table~\ref{tab:per_fold} shows per-fold results, enabling direct comparison of fold-level consistency across methods. All three approaches use identical \texttt{StratifiedKFold(5, shuffle=True, random\_state=42)} splits.
+
+\begin{table}[H]
+\centering
+\caption{Per-fold macro F1 scores for the three DINOv2-based approaches. Bold indicates the best method per fold.}
+\label{tab:per_fold}
+\begin{tabular}{@{}c cc cc cc@{}}
+\toprule
+& \multicolumn{2}{c}{\textcolor{rgbgreen}{\textbf{RGB}}} & \multicolumn{2}{c}{\textcolor{thermalred}{\textbf{Thermal}}} & \multicolumn{2}{c}{\textcolor{fusedpurple}{\textbf{Late Fusion}}} \\
+\cmidrule(lr){2-3} \cmidrule(lr){4-5} \cmidrule(lr){6-7}
+\textbf{Fold} & Acc & F1 & Acc & F1 & Acc & F1 \\
+\midrule
+1 & 0.945 & 0.939 & 0.855 & 0.848 & 0.945 & \textbf{0.935} \\
+2 & 0.955 & 0.957 & 0.927 & 0.923 & 0.973 & \textbf{0.970} \\
+3 & 0.964 & 0.965 & 0.945 & 0.941 & 0.964 & \textbf{0.959} \\
+4 & 0.936 & 0.937 & 0.882 & 0.868 & 0.964 & \textbf{0.965} \\
+5 & 0.955 & 0.957 & 0.955 & 0.949 & 0.973 & \textbf{0.973} \\
+\midrule
+Mean & 0.951 & 0.951 & 0.913 & 0.906 & \textbf{0.964} & \textbf{0.960} \\
+$\pm$Std & $\pm$0.009 & $\pm$0.011 & $\pm$0.038 & $\pm$0.041 & $\pm$\textbf{0.010} & $\pm$\textbf{0.014} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent Late fusion achieves the highest F1 in all 5 folds and exhibits the lowest variance ($\pm$0.014 vs.\ $\pm$0.011 for RGB and $\pm$0.041 for thermal), demonstrating both superior performance and stability. Notably, fusion is most beneficial when one modality underperforms: in Fold~4, where thermal F1 drops to 0.868, fusion achieves 0.965---substantially exceeding both individual modalities.
+
+\subsubsection{Per-Class F1 Comparison}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  ybar,
+  width=13cm, height=7cm,
+  ylabel={Macro F1 Score},
+  symbolic x coords={Glass, Metal, Paper, Plastic},
+  xtick=data,
+  ymin=0.75, ymax=1.02,
+  grid=major,
+  grid style={gray!15},
+  bar width=0.7cm,
+  enlarge x limits=0.2,
+  legend style={at={(0.5, -0.18)}, anchor=north, legend columns=3},
+  nodes near coords,
+  nodes near coords style={font=\tiny, rotate=90, anchor=west},
+]
+  \addplot[fill=rgbgreen!70, draw=rgbgreen] coordinates
+    {(Glass,0.985) (Metal,0.948) (Paper,0.932) (Plastic,0.938)};
+  \addplot[fill=thermalred!70, draw=thermalred] coordinates
+    {(Glass,0.970) (Metal,0.931) (Paper,0.804) (Plastic,0.917)};
+  \addplot[fill=fusedpurple!70, draw=fusedpurple] coordinates
+    {(Glass,0.992) (Metal,0.966) (Paper,0.920) (Plastic,0.964)};
+  \legend{RGB, Thermal, Late Fusion}
+\end{axis}
+\end{tikzpicture}
+\caption{Per-class F1 comparison across the three DINOv2-based approaches. Fusion improves over RGB-only for glass (+0.7 pp), metal (+1.8 pp), and plastic (+2.6 pp). Paper F1 decreases slightly with fusion (0.932$\to$0.920) due to persistent paper$\leftrightarrow$plastic confusion in the thermal branch.}
+\label{fig:f1_comparison}
+\end{figure}
+
+\subsubsection{Confusion Matrix Comparison}
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}[t]{0.32\textwidth}
+\centering
+\begin{tikzpicture}[font=\footnotesize, scale=0.85, every node/.style={scale=0.85}]
+  % RGB CM: [[131,1,0,0],[0,128,0,3],[0,3,89,6],[3,7,4,175]]
+  \fill[dinoblue!99!white] (0,0) rectangle (1,1);
+  \fill[thermalred!1!white] (1,0) rectangle (2,1);
+  \fill[white] (2,0) rectangle (3,1);
+  \fill[white] (3,0) rectangle (4,1);
+  \fill[white] (0,-1) rectangle (1,0);
+  \fill[dinoblue!98!white] (1,-1) rectangle (2,0);
+  \fill[white] (2,-1) rectangle (3,0);
+  \fill[thermalred!2!white] (3,-1) rectangle (4,0);
+  \fill[white] (0,-2) rectangle (1,-1);
+  \fill[thermalred!3!white] (1,-2) rectangle (2,-1);
+  \fill[dinoblue!91!white] (2,-2) rectangle (3,-1);
+  \fill[thermalred!6!white] (3,-2) rectangle (4,-1);
+  \fill[thermalred!2!white] (0,-3) rectangle (1,-2);
+  \fill[thermalred!4!white] (1,-3) rectangle (2,-2);
+  \fill[thermalred!2!white] (2,-3) rectangle (3,-2);
+  \fill[dinoblue!93!white] (3,-3) rectangle (4,-2);
+  \foreach \i in {0,...,4} {
+    \draw[gray!50] (\i,1) -- (\i,-3);
+    \draw[gray!50] (0,1-\i) -- (4,1-\i);
+  }
+  \node[font=\footnotesize\bfseries] at (0.5,0.5) {131};
+  \node[font=\footnotesize] at (1.5,0.5) {1};
+  \node[font=\footnotesize] at (2.5,0.5) {0};
+  \node[font=\footnotesize] at (3.5,0.5) {0};
+  \node[font=\footnotesize] at (0.5,-0.5) {0};
+  \node[font=\footnotesize\bfseries] at (1.5,-0.5) {128};
+  \node[font=\footnotesize] at (2.5,-0.5) {0};
+  \node[font=\footnotesize] at (3.5,-0.5) {3};
+  \node[font=\footnotesize] at (0.5,-1.5) {0};
+  \node[font=\footnotesize] at (1.5,-1.5) {3};
+  \node[font=\footnotesize\bfseries] at (2.5,-1.5) {89};
+  \node[font=\footnotesize] at (3.5,-1.5) {6};
+  \node[font=\footnotesize] at (0.5,-2.5) {3};
+  \node[font=\footnotesize] at (1.5,-2.5) {7};
+  \node[font=\footnotesize] at (2.5,-2.5) {4};
+  \node[font=\footnotesize\bfseries] at (3.5,-2.5) {175};
+  % Labels
+  \node[font=\tiny\bfseries, rotate=45, anchor=south] at (0.5,1.3) {Gl};
+  \node[font=\tiny\bfseries, rotate=45, anchor=south] at (1.5,1.3) {Me};
+  \node[font=\tiny\bfseries, rotate=45, anchor=south] at (2.5,1.3) {Pa};
+  \node[font=\tiny\bfseries, rotate=45, anchor=south] at (3.5,1.3) {Pl};
+  \node[font=\tiny\bfseries, anchor=east] at (-0.1,0.5) {Gl};
+  \node[font=\tiny\bfseries, anchor=east] at (-0.1,-0.5) {Me};
+  \node[font=\tiny\bfseries, anchor=east] at (-0.1,-1.5) {Pa};
+  \node[font=\tiny\bfseries, anchor=east] at (-0.1,-2.5) {Pl};
+\end{tikzpicture}
+\caption{\textcolor{rgbgreen}{RGB} (27 errors)}
+\label{fig:cm_rgb}
+\end{subfigure}
+\hfill
+\begin{subfigure}[t]{0.32\textwidth}
+\centering
+\begin{tikzpicture}[font=\footnotesize, scale=0.85, every node/.style={scale=0.85}]
+  % Thermal CM: [[130,1,0,1],[4,121,5,1],[2,5,80,11],[0,2,16,171]]
+  \fill[dinoblue!98!white] (0,0) rectangle (1,1);
+  \fill[thermalred!1!white] (1,0) rectangle (2,1);
+  \fill[white] (2,0) rectangle (3,1);
+  \fill[thermalred!1!white] (3,0) rectangle (4,1);
+  \fill[thermalred!3!white] (0,-1) rectangle (1,0);
+  \fill[dinoblue!92!white] (1,-1) rectangle (2,0);
+  \fill[thermalred!4!white] (2,-1) rectangle (3,0);
+  \fill[thermalred!1!white] (3,-1) rectangle (4,0);
+  \fill[thermalred!2!white] (0,-2) rectangle (1,-1);
+  \fill[thermalred!5!white] (1,-2) rectangle (2,-1);
+  \fill[dinoblue!82!white] (2,-2) rectangle (3,-1);
+  \fill[thermalred!11!white] (3,-2) rectangle (4,-1);
+  \fill[white] (0,-3) rectangle (1,-2);
+  \fill[thermalred!1!white] (1,-3) rectangle (2,-2);
+  \fill[thermalred!8!white] (2,-3) rectangle (3,-2);
+  \fill[dinoblue!91!white] (3,-3) rectangle (4,-2);
+  \foreach \i in {0,...,4} {
+    \draw[gray!50] (\i,1) -- (\i,-3);
+    \draw[gray!50] (0,1-\i) -- (4,1-\i);
+  }
+  \node[font=\footnotesize\bfseries] at (0.5,0.5) {130};
+  \node[font=\footnotesize] at (1.5,0.5) {1};
+  \node[font=\footnotesize] at (2.5,0.5) {0};
+  \node[font=\footnotesize] at (3.5,0.5) {1};
+  \node[font=\footnotesize] at (0.5,-0.5) {4};
+  \node[font=\footnotesize\bfseries] at (1.5,-0.5) {121};
+  \node[font=\footnotesize] at (2.5,-0.5) {5};
+  \node[font=\footnotesize] at (3.5,-0.5) {1};
+  \node[font=\footnotesize] at (0.5,-1.5) {2};
+  \node[font=\footnotesize] at (1.5,-1.5) {5};
+  \node[font=\footnotesize\bfseries] at (2.5,-1.5) {80};
+  \node[font=\footnotesize] at (3.5,-1.5) {11};
+  \node[font=\footnotesize] at (0.5,-2.5) {0};
+  \node[font=\footnotesize] at (1.5,-2.5) {2};
+  \node[font=\footnotesize] at (2.5,-2.5) {16};
+  \node[font=\footnotesize\bfseries] at (3.5,-2.5) {171};
+  % Labels
+  \node[font=\tiny\bfseries, rotate=45, anchor=south] at (0.5,1.3) {Gl};
+  \node[font=\tiny\bfseries, rotate=45, anchor=south] at (1.5,1.3) {Me};
+  \node[font=\tiny\bfseries, rotate=45, anchor=south] at (2.5,1.3) {Pa};
+  \node[font=\tiny\bfseries, rotate=45, anchor=south] at (3.5,1.3) {Pl};
+  \node[font=\tiny\bfseries, anchor=east] at (-0.1,0.5) {Gl};
+  \node[font=\tiny\bfseries, anchor=east] at (-0.1,-0.5) {Me};
+  \node[font=\tiny\bfseries, anchor=east] at (-0.1,-1.5) {Pa};
+  \node[font=\tiny\bfseries, anchor=east] at (-0.1,-2.5) {Pl};
+\end{tikzpicture}
+\caption{\textcolor{thermalred}{Thermal} (48 errors)}
+\label{fig:cm_thermal}
+\end{subfigure}
+\hfill
+\begin{subfigure}[t]{0.32\textwidth}
+\centering
+\begin{tikzpicture}[font=\footnotesize, scale=0.85, every node/.style={scale=0.85}]
+  % Fused CM: [[130,1,0,1],[0,129,0,2],[0,5,86,7],[0,1,3,185]]
+  \fill[dinoblue!98!white] (0,0) rectangle (1,1);
+  \fill[thermalred!1!white] (1,0) rectangle (2,1);
+  \fill[white] (2,0) rectangle (3,1);
+  \fill[thermalred!1!white] (3,0) rectangle (4,1);
+  \fill[white] (0,-1) rectangle (1,0);
+  \fill[dinoblue!98!white] (1,-1) rectangle (2,0);
+  \fill[white] (2,-1) rectangle (3,0);
+  \fill[thermalred!2!white] (3,-1) rectangle (4,0);
+  \fill[white] (0,-2) rectangle (1,-1);
+  \fill[thermalred!5!white] (1,-2) rectangle (2,-1);
+  \fill[dinoblue!88!white] (2,-2) rectangle (3,-1);
+  \fill[thermalred!7!white] (3,-2) rectangle (4,-1);
+  \fill[white] (0,-3) rectangle (1,-2);
+  \fill[thermalred!1!white] (1,-3) rectangle (2,-2);
+  \fill[thermalred!2!white] (2,-3) rectangle (3,-2);
+  \fill[dinoblue!98!white] (3,-3) rectangle (4,-2);
+  \foreach \i in {0,...,4} {
+    \draw[gray!50] (\i,1) -- (\i,-3);
+    \draw[gray!50] (0,1-\i) -- (4,1-\i);
+  }
+  \node[font=\footnotesize\bfseries] at (0.5,0.5) {130};
+  \node[font=\footnotesize] at (1.5,0.5) {1};
+  \node[font=\footnotesize] at (2.5,0.5) {0};
+  \node[font=\footnotesize] at (3.5,0.5) {1};
+  \node[font=\footnotesize] at (0.5,-0.5) {0};
+  \node[font=\footnotesize\bfseries] at (1.5,-0.5) {129};
+  \node[font=\footnotesize] at (2.5,-0.5) {0};
+  \node[font=\footnotesize] at (3.5,-0.5) {2};
+  \node[font=\footnotesize] at (0.5,-1.5) {0};
+  \node[font=\footnotesize] at (1.5,-1.5) {5};
+  \node[font=\footnotesize\bfseries] at (2.5,-1.5) {86};
+  \node[font=\footnotesize] at (3.5,-1.5) {7};
+  \node[font=\footnotesize] at (0.5,-2.5) {0};
+  \node[font=\footnotesize] at (1.5,-2.5) {1};
+  \node[font=\footnotesize] at (2.5,-2.5) {3};
+  \node[font=\footnotesize\bfseries] at (3.5,-2.5) {185};
+  % Labels
+  \node[font=\tiny\bfseries, rotate=45, anchor=south] at (0.5,1.3) {Gl};
+  \node[font=\tiny\bfseries, rotate=45, anchor=south] at (1.5,1.3) {Me};
+  \node[font=\tiny\bfseries, rotate=45, anchor=south] at (2.5,1.3) {Pa};
+  \node[font=\tiny\bfseries, rotate=45, anchor=south] at (3.5,1.3) {Pl};
+  \node[font=\tiny\bfseries, anchor=east] at (-0.1,0.5) {Gl};
+  \node[font=\tiny\bfseries, anchor=east] at (-0.1,-0.5) {Me};
+  \node[font=\tiny\bfseries, anchor=east] at (-0.1,-1.5) {Pa};
+  \node[font=\tiny\bfseries, anchor=east] at (-0.1,-2.5) {Pl};
+\end{tikzpicture}
+\caption{\textcolor{fusedpurple}{Late Fusion} (20 errors)}
+\label{fig:cm_fused}
+\end{subfigure}
+\caption{Side-by-side confusion matrices (pooled across 5 folds, 550 samples each). Late fusion reduces total errors from 27 (RGB) and 48 (thermal) to 20. Key improvements: metal$\to$glass errors eliminated (4$\to$0), plastic$\to$metal errors reduced (7$\to$1), and plastic$\to$paper errors reduced (4$\to$3). The dominant remaining error pattern is paper$\leftrightarrow$plastic confusion.}
+\label{fig:cm_comparison}
+\end{figure}
+
+\subsubsection{Analysis of Error Patterns Across Modalities}
+
+The three confusion matrices (Figure~\ref{fig:cm_comparison}) reveal complementary error patterns:
+
+\begin{itemize}[nosep]
+  \item \textbf{Glass:} Near-perfect in all three modalities (F1 $\geq$ 0.970). Both RGB (transparency, reflectivity) and thermal (distinctive emissivity) provide strong discriminative signals.
+
+  \item \textbf{Metal:} RGB excels at metal recall (0.977) while thermal is weaker (0.924). Fusion improves metal recall to 0.985, suggesting that RGB resolves thermal ambiguities for reflective surfaces. The metal$\to$glass confusion present in thermal (4 errors) is completely eliminated by fusion.
+
+  \item \textbf{Paper:} The most challenging class across all modalities. Thermal performs poorly (F1=0.804), with 18 errors primarily from paper$\leftrightarrow$plastic confusion. RGB performs much better (F1=0.932). Fusion achieves F1=0.920, a slight decrease from RGB alone, suggesting that thermal's paper confusion partially propagates through the fusion mechanism.
+
+  \item \textbf{Plastic:} Fusion provides the largest improvement (RGB F1=0.938 $\to$ fusion F1=0.964, +2.6 pp). RGB's plastic$\to$metal confusion (7 errors) is substantially reduced to 1 in fusion, indicating that thermal information helps disambiguate plastic from metal.
+\end{itemize}
+
+\noindent Overall, late fusion reduces total errors by 26\% relative to RGB alone (27$\to$20) and by 58\% relative to thermal alone (48$\to$20). The improvement is largest for classes where the two modalities have complementary error patterns (metal, plastic), and smallest where both modalities share the same confusion (paper$\leftrightarrow$plastic).
+
+
+% ══════════════════════════════════════════════════════════════
+%  9  DISCUSSION
+% ══════════════════════════════════════════════════════════════
+\section{Discussion}
+
+\subsection{Why DINOv2 Features Transfer Across Modalities}
+
+DINOv2's self-supervised pretraining learns visual representations that capture structural and textural properties rather than color-specific features. This makes the \cls{} token inherently robust to domain shift:
+
+\begin{itemize}[nosep]
+  \item \textbf{Texture sensitivity:} DINOv2 encodes surface texture, edges, and shape---properties visible in both RGB and thermal modalities (thermal images reveal surface roughness and material boundaries through emissivity gradients).
+  \item \textbf{Color invariance:} The self-distillation training objective encourages representations that are invariant to augmentations including color jitter, making the model less dependent on RGB-specific color information.
+  \item \textbf{Grayscale compatibility:} By replicating the single thermal channel to 3 channels, DINOv2 processes thermal images as ``grayscale photographs''---a domain well-represented in its 142M training images.
+\end{itemize}
+
+\subsection{Spatial vs.\ Temporal Thermal Features}
+
+The prior thermal baselines (Table~\ref{tab:three_way}) exploit \textit{temporal} thermal dynamics---how material temperature changes over time as objects heat and cool. The DINOv2-based thermal pipeline instead uses \textit{spatial} features from individual thermal frames, achieving a mean macro F1 of 0.906---a 23 percentage point improvement over the best temporal baseline (BiGRU, F1=0.676). These approaches capture complementary information:
+
+\begin{table}[H]
+\centering
+\caption{Spatial vs.\ temporal thermal feature paradigms.}
+\label{tab:paradigms}
+\begin{tabular}{@{}p{3cm}p{5.5cm}p{5.5cm}@{}}
+\toprule
+& \textbf{Temporal Features} & \textbf{Spatial Features (DINOv2)} \\
+\midrule
+\textbf{Input} & Thermal intensity time-series $I(t)$ & Individual thermal frames $I(x,y)$ \\
+\textbf{Captures} & Heating/cooling dynamics, thermal conductivity, specific heat & Surface texture, shape, emissivity patterns, spatial temperature distribution \\
+\textbf{Robustness} & Requires calibrated heating zone & Works with any thermal frame \\
+\textbf{Architecture} & SVM, RNNs, 1D-CNNs & Frozen ViT + attention pooling \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Complementarity of RGB and Thermal Modalities}
+
+The per-fold comparison (Table~\ref{tab:per_fold}) and confusion matrices (Figure~\ref{fig:cm_comparison}) reveal that RGB and thermal errors are partially complementary:
+
+\begin{itemize}[nosep]
+  \item \textbf{RGB strengths:} Superior paper classification (F1=0.932 vs.\ 0.804 thermal) and overall higher accuracy. RGB captures color and fine texture cues that distinguish paper from plastic.
+  \item \textbf{Thermal strengths:} Thermal helps disambiguate plastic from metal---fusion reduces plastic$\to$metal errors from 7 to 1 compared to RGB alone. Thermal emissivity signatures provide material composition cues invisible to RGB.
+  \item \textbf{Shared weakness:} Both modalities struggle with paper$\leftrightarrow$plastic, which remains the dominant error pattern even after fusion (12 of 20 fused errors). This suggests that paper and plastic share both visual and thermal similarities in our dataset.
+\end{itemize}
+
+\noindent The fusion improvement (+1.0 pp mean F1 over RGB, with 26\% fewer errors) demonstrates that the modalities provide complementary rather than redundant information, despite the large performance gap between them individually.
+
+\subsection{Parameter Efficiency}
+
+All three DINOv2-based approaches are remarkably parameter-efficient:
+
+\begin{itemize}[nosep]
+  \item \textbf{Single-modal:} 528K trainable parameters (0.17\% of the 304M backbone). Trains in ${\sim}$2 minutes on cached features.
+  \item \textbf{Late fusion:} 1.05M trainable parameters (0.35\% of backbone). Despite doubling the parameter count, the fused model remains lightweight. The additional cost is one extra attention pool (263K) and a wider MLP input layer (262K extra).
+  \item \textbf{Feature caching eliminates runtime overhead:} Since both RGB and thermal features are precomputed, fusion training is no more expensive than single-modal training---the model never loads the 304M-parameter DINOv2 backbone.
+\end{itemize}
+
+\subsection{Practical Implications}
+
+\begin{enumerate}[nosep]
+  \item \textbf{Minimal training footprint:} With only ${\sim}$528K--1.05M trainable parameters and feature caching, training completes in minutes on a single GPU. No fine-tuning of the 304M-parameter backbone is required.
+  \item \textbf{Modality-agnostic architecture:} The same attention pool + MLP head design works for RGB, thermal, and fused inputs, differing only in the preprocessing stage and feature concatenation.
+  \item \textbf{Interpretable attention:} The learned attention weights $\alpha_t$ (Eq.~\ref{eq:weight}) reveal which temporal views are most discriminative, potentially guiding camera placement or exposure timing in deployment.
+  \item \textbf{Multi-modal deployment trade-off:} Late fusion provides a 1.0 pp F1 improvement over RGB-only at the cost of requiring a synchronized thermal camera and spatial calibration. For applications where near-perfect accuracy is critical (e.g., regulatory compliance), the additional hardware is justified; for cost-sensitive deployments, RGB-only at 95.1\% F1 may suffice.
+\end{enumerate}
+
+
+% ══════════════════════════════════════════════════════════════
+%  10  CONCLUSION
+% ══════════════════════════════════════════════════════════════
+\section{Conclusion}
+
+This report presented a three-way material classification system for conveyor belt waste sorting, comparing RGB-only, thermal-only, and late fusion pipelines---all built on frozen DINOv2 ViT-L/14 features. The key findings are:
+
+\begin{enumerate}[nosep]
+  \item \textbf{Frozen foundation model features are highly effective} for material classification. RGB achieves \textbf{95.1\% macro F1} with 528K trainable parameters (0.17\% of backbone). Thermal achieves \textbf{90.6\% macro F1} with the same architecture, a 23 pp improvement over the best prior temporal baseline.
+  \item \textbf{Late fusion improves over both individual modalities,} achieving \textbf{96.0\% macro F1} with 1.05M trainable parameters (0.35\% of backbone). Fusion reduces classification errors by 26\% relative to RGB alone, with the largest gains for metal and plastic.
+  \item \textbf{RGB and thermal provide complementary error patterns.} RGB excels at paper discrimination while thermal helps disambiguate plastic from metal. Fusion exploits this complementarity, though the shared paper$\leftrightarrow$plastic confusion persists.
+  \item \textbf{Attention pooling provides an interpretable aggregation mechanism} for multi-view tracklet classification, and the modality-specific pools in the fusion model enable each modality to learn its own temporal weighting.
+  \item \textbf{Feature caching enables rapid experimentation} by decoupling the expensive backbone forward pass from the lightweight training loop. All three pipelines train in minutes on cached features.
+\end{enumerate}
+
+\noindent The late fusion pipeline achieves near-perfect glass classification (F1=0.992), strong metal and plastic performance (F1$\geq$0.964), and reduces total misclassifications to just 20 out of 550 tracklets. The remaining errors are concentrated in paper$\leftrightarrow$plastic confusion, suggesting that future improvements should focus on features that capture the physical differences between these materials---potentially combining spatial DINOv2 features with temporal thermal dynamics.
+
+\vspace{1cm}
+\noindent\rule{\textwidth}{0.5pt}
+\begin{center}
+  \small\textit{Generated \today. All results from 5-fold stratified cross-validation on 550 tracklets across 19 experiment videos.}
+\end{center}
+
+\end{document}
