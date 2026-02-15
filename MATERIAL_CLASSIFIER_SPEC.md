@@ -42,25 +42,30 @@ MLP Head → 4-class softmax → {plastic, metal, glass, paper}
 
 ```
 material_classifier/
+├── __init__.py
 ├── config/
 │   └── default.yaml              # all hyperparameters and paths
 ├── data/
-│   ├── dataset.py                # TrackletDataset (PyTorch Dataset)
-│   └── preprocessing.py          # detection, tracking, masking, frame sampling
+│   ├── dataset.py                # TrackletDataset, CachedFeatureDataset, collate_fn
+│   └── preprocessing.py          # masking, cropping, frame sampling, augmentation
 ├── tracking/
 │   ├── detector.py               # Detectron2 inference wrapper (frozen model)
-│   └── ocsort.py                 # OC-SORT multi-object tracker
+│   └── ocsort.py                 # OC-SORT multi-object tracker (with OCR + merge + dedup)
 ├── models/
 │   ├── feature_extractor.py      # DINOv2 frozen backbone wrapper
 │   ├── attention_pool.py         # learnable attention pooling module
 │   ├── classifier.py             # MLP classification head
-│   └── pipeline.py               # full model: extractor + pool + head
+│   └── pipeline.py               # MaterialClassifier + CachedMaterialClassifier
 ├── train.py                      # feature caching + training loop
 ├── evaluate.py                   # evaluation metrics + confusion matrix
 ├── inference.py                  # detect-and-track (single/batch) + full inference
 ├── label.py                      # interactive tracklet labeling tool (OpenCV GUI)
 ├── visualize.py                  # tracklet overlay visualization on video
 └── analyze_gaps.py               # detection gap analysis + frame extraction
+
+cross_validate.py                 # 5-fold stratified cross-validation script
+labels.csv                        # 550 tracklet labels (19 videos, 4 classes)
+videos/                           # symlinks to experiment videos in ~/Downloads/
 ```
 
 ---
@@ -284,7 +289,7 @@ model:
 
 training:
   batch_size: 8
-  epochs: 50
+  epochs: 20
   lr: 1e-3                         # only attention pool + MLP are trained
   weight_decay: 1e-4
   scheduler: "cosine"              # cosine annealing to 0
@@ -313,7 +318,7 @@ output:
 - **Optimizer**: AdamW (lr=1e-3, weight_decay=1e-4) — only over `pool` and `head` parameters
 - **Loss**: CrossEntropyLoss with label_smoothing=0.1
 - **Scheduler**: CosineAnnealingLR with linear warmup for first 5 epochs
-- **Only ~200K trainable parameters** (attention pool + MLP). Backbone is completely frozen.
+- **~528K trainable parameters** (attention pool + MLP). Backbone is completely frozen.
 - **Gradient accumulation**: if GPU memory is tight, accumulate over 2-4 steps
 - **Mixed precision**: use `torch.amp.autocast("cuda")` for the DINOv2 forward pass (reduces memory, backbone is frozen so no precision concerns for gradients)
 
@@ -352,11 +357,29 @@ def collate_fn(batch):
 
 ## Evaluation
 
+### Current Results
+
+**5-Fold Stratified Cross-Validation** on 550 labeled tracklets from 19 experiment videos:
+
+| Metric | Value |
+|--------|-------|
+| Mean Accuracy | **0.9509 +/- 0.0093** |
+| Mean Macro F1 | **0.9507 +/- 0.0110** |
+
+Per-class (pooled across all folds):
+
+| Class | Precision | Recall | F1 | Count |
+|-------|-----------|--------|----|-------|
+| glass | 0.978 | 0.992 | 0.985 | 132 |
+| metal | 0.921 | 0.977 | 0.948 | 131 |
+| paper | 0.957 | 0.908 | 0.932 | 98 |
+| plastic | 0.951 | 0.926 | 0.938 | 189 |
+
 ### Metrics
 - **Primary**: Accuracy, Macro F1-Score (handles class imbalance)
 - **Per-class**: Precision, Recall, F1 for each material
 - **Confusion matrix**: save as image after each eval
-- Use `torchmetrics` or `sklearn.metrics`
+- Uses `sklearn.metrics`
 
 ### Inference (`inference.py`)
 

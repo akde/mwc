@@ -12,13 +12,42 @@ Video (.mp4)
   → OC-SORT Tracking (with OCR, duplicate suppression, track merging)
       → per-object tracklets (persistent track_id)
   → Per-tracklet: Masked Crop + Resize (518x518, gray fill 128)
-  → Per-tracklet: Uniform sample N frames
-  → DINOv2 ViT-L/14 (frozen) → [CLS] per frame → (B, T, 1024)
-  → Attention Pooling (trainable) → (B, 1024)
+  → Per-tracklet: Uniform sample 8 frames
+  → DINOv2 ViT-L/14 (frozen) → [CLS] per frame → 8 × 1024
+  → Attention Pooling (trainable) → 1 × 1024
   → MLP Head (trainable) → 4-class logits → {glass, metal, paper, plastic}
 ```
 
 ~528K trainable parameters (attention pool + MLP head). Detectron2 and DINOv2 are completely frozen.
+
+## Current Results
+
+**5-Fold Stratified Cross-Validation** on 550 labeled tracklets from 19 experiment videos:
+
+| Metric | Value |
+|--------|-------|
+| Mean Accuracy | **0.9509 +/- 0.0093** |
+| Mean Macro F1 | **0.9507 +/- 0.0110** |
+
+Per-class (pooled across all folds):
+
+| Class | Precision | Recall | F1 | Count |
+|-------|-----------|--------|----|-------|
+| glass | 0.978 | 0.992 | 0.985 | 132 |
+| metal | 0.921 | 0.977 | 0.948 | 131 |
+| paper | 0.957 | 0.908 | 0.932 | 98 |
+| plastic | 0.951 | 0.926 | 0.938 | 189 |
+
+Confusion matrix (pooled):
+```
+          glass  metal  paper  plastic
+glass    [131      1      0      0]
+metal    [  0    128      0      3]
+paper    [  0      3     89      6]
+plastic  [  3      7      4    175]
+```
+
+27 misclassifications out of 550. Glass is near-perfect. Most confusion is between plastic/metal/paper.
 
 ## Project Structure
 
@@ -48,10 +77,15 @@ material_classifier/
 
 Other project files:
 ```
+cross_validate.py                 # 5-fold stratified cross-validation script
+labels.csv                        # 550 tracklet labels (19 videos, 4 classes)
+videos/                           # symlinks to experiment videos in ~/Downloads/
 det2_model/                       # frozen Detectron2 model (config.yaml + model_best.pth)
+tracklets/                        # detect-and-track output (generated, not committed)
+features/                         # cached DINOv2 [CLS] features (generated, not committed)
+checkpoints/                      # trained model weights (generated, not committed)
 requirements.txt                  # Python dependencies
 MATERIAL_CLASSIFIER_SPEC.md       # authoritative spec (module code, hyperparameters, data formats)
-tracklets/                        # detect-and-track output (generated, not committed)
 ```
 
 ## Commands
@@ -134,14 +168,25 @@ python material_classifier/analyze_gaps.py \
 Interactive OpenCV GUI for assigning material classes to tracklets.
 
 ```bash
-# Label tracklets interactively (1=glass 2=metal 3=paper 4=plastic, u=undo, s=skip, q=quit)
+# Label tracklets interactively (1=glass 2=metal 3=paper 4=plastic, u=undo, s=skip, q=quit, c=capture)
 python material_classifier/label.py \
   --video ~/Downloads/0798/IMG_0798_synched_cropped.mp4 \
-  --tracklets-dir tracklets/
+  --tracklets-dir tracklets/ \
+  --min-track-length 1000
 
 # Assign stratified train/val splits after labeling
 python material_classifier/label.py --assign-splits --labels-csv labels.csv
 ```
+
+**Parameters:**
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--video` | (required) | Path to source video |
+| `--tracklets-dir` | `tracklets/` | Base tracklets directory |
+| `--labels-csv` | `labels.csv` | Output labels CSV path |
+| `--min-track-length` | 0 | Only show tracks with at least this many frames (use 1000 to filter to high-quality tracklets) |
+| `--assign-splits` | false | Assign stratified train/val splits instead of labeling |
+| `--train-ratio` | 0.8 | Train split ratio for `--assign-splits` |
 
 ### Visualization
 
@@ -168,7 +213,15 @@ python material_classifier/train.py --config material_classifier/config/default.
 ```bash
 python material_classifier/evaluate.py \
   --config material_classifier/config/default.yaml \
-  --checkpoint checkpoints/best_model.pt
+  --checkpoint checkpoints/best_model.pt \
+  --split val
+```
+
+### Cross-Validation
+
+```bash
+# 5-fold stratified CV (uses cached features, restores original splits when done)
+python cross_validate.py
 ```
 
 ### Full Inference (detect + track + classify)
@@ -185,16 +238,30 @@ python material_classifier/inference.py \
 1. **Detect & track** — run `inference.py --detect-and-track` on all videos
 2. **Review** — run `visualize.py` to inspect tracklets visually
 3. **Analyze gaps** — run `analyze_gaps.py` to find detection failures and extract frames for retraining
-4. **Label** — run `label.py` to assign material classes interactively
-5. **Split** — run `label.py --assign-splits` for stratified train/val
+4. **Label** — run `label.py --min-track-length 1000` to assign material classes interactively
+5. **Split** — run `label.py --assign-splits` for stratified 80/20 train/val
 6. **Cache features** — run `train.py --cache-features` to precompute DINOv2 [CLS] tokens
 7. **Train** — run `train.py` to train attention pool + MLP head on cached features
-8. **Evaluate** — run `evaluate.py` on test split
-9. **Infer** — run `inference.py --video --checkpoint` for end-to-end prediction
+8. **Evaluate** — run `evaluate.py --split val` on validation split
+9. **Cross-validate** — run `cross_validate.py` for 5-fold stratified CV
+10. **Infer** — run `inference.py --video --checkpoint` for end-to-end prediction
+
+## Dataset
+
+19 experiment videos, 550 labeled tracklets (filtered to tracks with >= 1000 frames):
+
+| Class | Count | Percentage |
+|-------|-------|------------|
+| glass | 132 | 24.0% |
+| metal | 131 | 23.8% |
+| paper | 98 | 17.8% |
+| plastic | 189 | 34.4% |
+
+Split: 438 train (80%) / 112 val (20%), stratified by class.
 
 ## Data Formats
 
-### Labels CSV (manual annotation after step 3)
+### Labels CSV (`labels.csv`)
 
 ```csv
 video,track_id,split,class
@@ -221,9 +288,10 @@ Experiment videos live in `~/Downloads/` in 4-digit folders:
 ~/Downloads/0797/IMG_0797_synched_cropped.mp4
 ~/Downloads/0798/IMG_0798_synched_cropped.mp4
 ...
+~/Downloads/0854/IMG_0854_synched_cropped.mp4
 ```
 
-The `--video-dir` flag in `inference.py` auto-discovers this pattern.
+The `--video-dir` flag in `inference.py` auto-discovers this pattern. The `videos/` directory contains symlinks to these files for use by the training pipeline.
 
 ## Pre-trained Models (frozen)
 
@@ -236,7 +304,7 @@ The `--video-dir` flag in `inference.py` auto-discovers this pattern.
 
 2. **Detectron2 model is frozen.** Use the pre-trained model at `det2_model/` for inference only.
 
-3. **Detectron2 config loading:** Must use `get_cfg()` (not bare `CfgNode()`) then `cfg.set_new_allowed(True)` before `merge_from_file`. Bare `CfgNode()` lacks the `VERSION` field → `AttributeError: VERSION`.
+3. **Detectron2 config loading:** Must use `get_cfg()` (not bare `CfgNode()`) then `cfg.set_new_allowed(True)` before `merge_from_file`. Bare `CfgNode()` lacks the `VERSION` field -> `AttributeError: VERSION`.
 
 4. **Image size must be 518x518.** DINOv2 ViT-L/14 patch size is 14; input must be divisible by 14. The model was trained at 518x518.
 
