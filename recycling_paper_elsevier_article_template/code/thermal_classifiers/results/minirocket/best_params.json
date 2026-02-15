@@ -1,0 +1,8 @@
+{
+  "model_type": "minirocket",
+  "best_params": {
+    "num_kernels": 10000,
+    "ridge_alpha": 46.41588833612773
+  },
+  "timestamp": "2026-02-15T14:31:49.843881"
+}

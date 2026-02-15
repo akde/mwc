@@ -1,0 +1,11 @@
+{
+  "method": "lstm",
+  "params": {
+    "hidden_dim": 128,
+    "num_layers": 1,
+    "dropout": 0.3,
+    "learning_rate": 0.001,
+    "pooling": "mean"
+  },
+  "n_parameters": 298372
+}

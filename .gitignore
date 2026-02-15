@@ -13,7 +13,30 @@ __pycache__/
 *.pyc
 *.pyo
 *.egg-info/
+*.nbc
+*.nbi
 
 # IDE
 .vscode/
 .idea/
+
+# LaTeX build artifacts
+*.aux
+*.log
+*.out
+*.bbl
+*.blg
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+pdflatex.log
+
+# Thermal classifier generated outputs
+recycling_paper_elsevier_article_template/code/thermal_classifiers/results/*/checkpoints/
+recycling_paper_elsevier_article_template/code/thermal_classifiers/results/*/model.pt
+recycling_paper_elsevier_article_template/code/thermal_classifiers/results/*/model.joblib
+recycling_paper_elsevier_article_template/code/thermal_classifiers/results/*/*.npy
+
+# Compiled PDFs (keep source, not output)
+recycling_paper_elsevier_article_template/main.pdf
+recycling_paper_elsevier_article_template/grabs.pdf

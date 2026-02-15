@@ -1,0 +1,12 @@
+{
+  "method": "tcn",
+  "params": {
+    "num_channels": 64,
+    "num_layers": 6,
+    "kernel_size": 3,
+    "dropout": 0.3,
+    "learning_rate": 0.001,
+    "pooling": "avg"
+  },
+  "n_parameters": 137284
+}

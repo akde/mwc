@@ -1,0 +1,12 @@
+{
+  "method": "cnn_1d",
+  "params": {
+    "num_filters": 64,
+    "num_layers": 3,
+    "kernel_sizes_preset": "decreasing",
+    "dropout": 0.3,
+    "learning_rate": 0.001,
+    "pooling": "last"
+  },
+  "n_parameters": 92036
+}

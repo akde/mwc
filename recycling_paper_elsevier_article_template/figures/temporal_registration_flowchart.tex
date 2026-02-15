@@ -1,0 +1,84 @@
+% Temporal Registration Flowchart - Clean Layout
+\begin{figure}[!htbp]
+\centering
+\begin{tikzpicture}[
+    % Styles
+    startstop/.style={
+        rectangle, rounded corners=4pt,
+        minimum width=3.2cm, minimum height=0.65cm,
+        draw=black, fill=gray!12,
+        font=\small, align=center
+    },
+    process/.style={
+        rectangle,
+        minimum width=3.2cm, minimum height=0.65cm,
+        draw=black, fill=white,
+        font=\small, align=center
+    },
+    decision/.style={
+        diamond, aspect=2.2,
+        draw=black, fill=white,
+        font=\small, align=center,
+        inner sep=1pt
+    },
+    arrow/.style={-{Stealth[length=2mm]}, thick},
+    lbl/.style={font=\scriptsize, fill=white, inner sep=1pt}
+]
+
+% === COLUMN 1 (Main flow - center) ===
+\node (init) [startstop] at (0, 0) {Start: first RGB frame};
+\node (search) [process] at (0, -1.5) {Search thermal frames\\in current window};
+\node (found) [decision] at (0, -3.3) {$n \geq 4$\\matches?};
+\node (record) [process] at (0, -5.2) {Record best match\\Advance search center};
+\node (quality) [decision] at (0, -7) {SNR $<$ 15?};
+
+% === COLUMN 2 (Quality branches - spread left/right) ===
+\node (reset) [process] at (-2.8, -8.8) {Keep default\\window};
+\node (expand) [process] at (2.8, -8.8) {Expand window\\(NUC detected)};
+
+% === COLUMN 3 (Retry loop - far right) ===
+\node (maxwin) [decision] at (5.5, -3.3) {Window\\maxed?};
+\node (double) [process] at (5.5, -1.5) {Double window};
+\node (skip) [process] at (5.5, -5.2) {Skip frame};
+
+% === BOTTOM (Loop control) ===
+\node (next) [process] at (0, -10.5) {Next RGB frame};
+\node (done) [decision] at (0, -12.3) {All frames\\done?};
+\node (stop) [startstop] at (0, -14) {End};
+
+% === ARROWS ===
+% Main vertical flow
+\draw [arrow] (init) -- (search);
+\draw [arrow] (search) -- (found);
+
+% Found match? -> Yes -> Record
+\draw [arrow] (found) -- node[lbl, right] {Yes} (record);
+\draw [arrow] (record) -- (quality);
+
+% Quality branches
+\draw [arrow] (quality) -| node[lbl, pos=0.25, above] {Yes} (reset);
+\draw [arrow] (quality) -| node[lbl, pos=0.25, above] {No} (expand);
+
+% Reset/Expand/Skip -> Next (from left, top, right)
+\draw [arrow] (reset.south) |- (next.west);
+\draw [arrow] (expand.south) -- ++(0, -0.5) -| (next.north);
+
+% Found match? -> No -> Retry path
+\draw [arrow] (found) -- node[lbl, above] {No} (maxwin);
+\draw [arrow] (maxwin) -- node[lbl, right] {No} (double);
+\draw [arrow] (double) -- (search);
+\draw [arrow] (maxwin) -- node[lbl, right] {Yes} (skip);
+% Skip enters from right (perpendicular)
+\draw [arrow] (skip.south) |- (next.east);
+
+% Main loop
+\draw [arrow] (next) -- (done);
+\draw [arrow] (done) -- node[lbl, right] {Yes} (stop);
+% Route loop-back arrow far left to avoid "Keep default window" box
+\draw [arrow] (done.west) -- node[lbl, above] {No} ++(-4.8, 0) |- (search.west);
+
+\end{tikzpicture}
+
+\caption{Temporal frame matching algorithm. For each RGB frame $i$, the algorithm searches thermal frames within a sliding window $[c_i - L, c_i + L]$ centered at the previous match. SuperPoint-SuperGlue detects and matches keypoints across modalities; the optimal thermal frame $j^*$ minimizes average Euclidean displacement $\bar{d}(i,j)$ between matched feature positions---since frames are spatially aligned, temporally coincident frames exhibit co-located features. Matching requires $n \geq 4$ correspondences after confidence filtering (top 50\% by descriptor distance); fewer matches trigger window expansion up to 200 frames. Quality metrics (SNR, gradient) detect NUC events and preemptively expand the next frame's window.}
+\label{fig:temporal_flowchart}
+\end{figure}

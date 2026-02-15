@@ -1,0 +1,12 @@
+{
+  "method": "inceptiontime",
+  "params": {
+    "nb_filters": 32,
+    "depth": 6,
+    "kernel_sizes_preset": "default",
+    "dropout": 0.2,
+    "learning_rate": 0.001,
+    "use_residual": true
+  },
+  "n_parameters": 404068
+}
