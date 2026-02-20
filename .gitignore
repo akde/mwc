@@ -7,6 +7,13 @@ tracklets_*/
 features/
 checkpoints/
 logs/
+thermal_viz/
+thermal_features/
+thermal_checkpoints/
+thermal_logs/
+fused_checkpoints/
+fused_logs/
+videos/
 
 # Python
 __pycache__/

@@ -146,11 +146,13 @@
 
 %% Abstract
 \begin{abstract}
-Automated waste classification on high-throughput conveyor systems requires material discrimination beyond visual appearance. We present a framework combining RGB and thermal imaging for classifying municipal solid waste into four categories: metal, plastic, glass, and paper. The system introduces an active heating zone where objects acquire material-specific thermal signatures as they travel along the conveyor, while independently operating RGB and thermal cameras record their trajectories. Since the cameras lack hardware synchronization and timestamps are unreliable, we develop a feature-based spatial-temporal registration method that achieves 2.27-pixel spatial alignment and 4.68-pixel mean temporal registration error across 281,439 validated frame pairs, enabling thermal time-series extraction from 550 tracked object trajectories.
+Automated waste classification on high-throughput conveyor systems requires material discrimination beyond visual appearance. We present a multi-modal framework combining RGB and thermal imaging for classifying municipal solid waste into four categories (glass, metal, paper, plastic) on a continuous conveyor belt. The system introduces an active heating zone where objects acquire material-specific thermal signatures, while independently operating RGB and thermal cameras record their trajectories. Since the cameras lack hardware synchronization and timestamps are unreliable, we develop a feature-based spatial-temporal registration method that achieves 2.27-pixel spatial alignment and 4.68-pixel mean temporal registration error across 281,439 validated frame pairs.
 
-Leveraging these registered sequences, we systematically evaluate eight classification methods on thermal intensity time-series. SVM with five statistical features achieves F1 = 0.678, comparable to deep learning approaches (BiGRU F1 = 0.676, InceptionTime F1 = 0.672), while all sequence-based methods substantially outperform the peak histogram baseline of \citet{GUNDUPALLI201713} (F1 = 0.550), confirming that temporal shape encodes material-discriminative information beyond peak statistics. Glass is most reliably classified (F1 = 0.786) owing to its distinctively low thermal response, while metal presents the greatest challenge (F1 = 0.490) due to high thermal variability.
+We propose a classification pipeline built on frozen DINOv2 ViT-L/14 features. Per-tracklet frame crops are encoded into 1024-dimensional [CLS] tokens, aggregated via learnable attention pooling, and classified by a lightweight MLP head (${\sim}$528K trainable parameters per modality, ${\sim}$1.05M for fusion). Evaluated through 5-fold stratified cross-validation on 550 tracked object trajectories, the RGB pipeline achieves macro F1 = 0.951, the thermal pipeline F1 = 0.906, and a late fusion architecture combining both modalities reaches F1 = 0.960, reducing classification errors by 26\% relative to RGB alone.
 
-We release ThermalRGBTrash, an RGB-thermal video dataset for conveyor-based waste classification, comprising 550 tracked object trajectories across four material classes with synchronized thermal time-series capturing dynamic heating and cooling responses unavailable in static imagery.
+As a secondary contribution, we benchmark eight thermal time-series classification methods on handcrafted temporal features, with SVM achieving best F1 = 0.678. The DINOv2-based thermal pipeline (F1 = 0.906) outperforms the best time-series method by +0.228, demonstrating that self-supervised visual features capture substantially richer material signatures from thermal imagery than handcrafted temporal statistics.
+
+We release ThermalRGBTrash, an RGB-thermal video dataset comprising 550 tracked object trajectories across four material classes with synchronized thermal time-series.
 \end{abstract}
 
 %%Graphical abstract
@@ -160,15 +162,16 @@ We release ThermalRGBTrash, an RGB-thermal video dataset for conveyor-based wast
 
 %%Research highlights
 \begin{highlights}
-\item SVM with five thermal features achieves F1 = 0.678, matching deep learning approaches (BiGRU F1 = 0.676, InceptionTime F1 = 0.672)
-\item All sequence-based classifiers outperform peak histogram features (Gundupalli F1 = 0.550), confirming temporal shape encodes material information
+\item Late fusion of frozen DINOv2 features from RGB and thermal modalities achieves F1 = 0.960 with only ${\sim}$1.05M trainable parameters
+\item DINOv2-based thermal classification (F1 = 0.906) outperforms best thermal time-series method (SVM F1 = 0.678) by +0.228
+\item RGB pipeline with DINOv2 attention pooling achieves F1 = 0.951 on 5-fold cross-validation over 550 tracklets
 \item Feature-based registration achieves 2.27-pixel spatial and 4.68-pixel temporal alignment across 281,439 frame pairs without hardware synchronization
 \item Release of ThermalRGBTrash, an RGB-thermal dataset for conveyor-based waste classification (550 tracked object trajectories)
 \end{highlights}
 
 %% Keywords
 \begin{keyword}
-waste classification \sep thermal imaging \sep deep learning \sep conveyor system \sep time-series classification
+waste classification \sep thermal imaging \sep deep learning \sep conveyor system \sep foundation models \sep vision transformers \sep late fusion \sep DINOv2
 \end{keyword}
 
 \end{frontmatter}
@@ -193,26 +196,30 @@ Thermal imaging in the LWIR band (7.5--14 $\mu$m) captures material-specific beh
 
 Combining RGB with complementary sensing modalities can address the limitations of each individual sensor. \citet{ji2023rgbnir} fused RGB with near-infrared (NIR) spectral features to classify plastic waste by material type and color, demonstrating improved discrimination over RGB-only approaches. \citet{li2022rgbd_cdw} proposed RGB-D fusion models combining color images with depth data from laser line-scanning for construction and demolition waste detection using Mask R-CNN. \citet{casao2024spectralwaste} introduced SpectralWaste, the first industrial RGB-hyperspectral dataset for waste sorting, demonstrating that multimodal fusion improves segmentation in cluttered recycling facility environments. For cross-modal image matching between RGB and thermal modalities, \citet{tuzcuoglu2024xoftr} proposed XoFTR, a Transformer-based feature matching method using masked image modeling pre-training to handle the significant texture and intensity differences between visible and thermal images. For waste classification with sequential data, hybrid CNN-LSTM architectures combining convolutional feature extraction with recurrent temporal modeling achieve 95.45\% accuracy on TrashNet~\citep{lilhore2024cnnlstm}, while Vision Transformers adapted for waste classification reach 96.98\% accuracy through transfer learning~\citep{srinilta2021vitwaste}. However, systematic evaluation of thermal time-series classification methods for waste sorting on continuous conveyor systems remains unexplored.
 
-The critical gap in prior work is the absence of methods that exploit \emph{dynamic} thermal signatures, specifically the time-varying heating and cooling patterns that encode material-specific thermal properties, for waste classification on continuous conveyor systems. Prior thermal approaches rely on static measurements requiring enclosed chambers, while RGB-based methods cannot capture thermodynamic properties regardless of model sophistication.
+The critical gap in prior work is the absence of methods that exploit \emph{dynamic} thermal signatures, specifically the time-varying heating and cooling patterns that encode material-specific thermal properties, for waste classification on continuous conveyor systems. Prior thermal approaches rely on static measurements requiring enclosed chambers, while RGB-based methods cannot capture thermodynamic properties regardless of model sophistication. Moreover, existing waste classification systems train task-specific feature extractors from scratch, limiting their generalization. Self-supervised visual foundation models such as DINOv2~\citep{oquab2024dinov2}, trained on large-scale image collections, learn general-purpose visual representations that transfer effectively to downstream tasks without fine-tuning the backbone~\citep{caron2021dino}. These models have demonstrated strong cross-domain transfer, but their application to waste classification---and in particular to thermal imagery, a domain far from their training distribution---remains unexplored.
 
-To address this gap, we propose a framework combining RGB and thermal imaging for solid waste classification, with systematic evaluation of thermal time-series classification methods. The main contributions are:
+To address these gaps, we propose a multi-modal framework combining RGB and thermal imaging for solid waste classification. We introduce a DINOv2-based classification pipeline that leverages frozen self-supervised features from both modalities, and we benchmark thermal time-series classification methods as a complementary baseline. The main contributions are:
 
 \begin{enumerate}
     \item We design an open-air heating zone that exposes material-specific thermal signatures as objects pass continuously, avoiding the throughput limitations of enclosed chambers.
 
     \item We develop a spatial-temporal registration method for unsynchronized RGB-thermal cameras, combining learned feature matching (SuperPoint-SuperGlue) with adaptive temporal search to achieve 2.27-pixel spatial and 4.68-pixel temporal alignment without hardware synchronization or reliable timestamps.
 
-    \item We systematically benchmark eight thermal classification methods---including SVM, recurrent networks (BiLSTM, BiGRU), convolutional architectures (TCN, 1D~CNN, InceptionTime), Transformer, and MiniRocket---on thermal intensity time-series extracted from 550 tracked object trajectories. SVM with five statistical features (F1 = 0.678) achieves competitive performance with deep learning approaches, while all sequence-based methods outperform the peak histogram baseline (F1 = 0.550), confirming that temporal dynamics encode material-discriminative information.
+    \item We propose a DINOv2-based multi-modal classification pipeline using frozen ViT-L/14 features~\citep{dosovitskiy2021vit} with learnable attention pooling~\citep{ilse2018attention} and a lightweight MLP head (${\sim}$528K trainable parameters per modality). Evaluated via 5-fold stratified cross-validation on 550 tracklets, the pipeline achieves F1 = 0.951 (RGB), F1 = 0.906 (thermal), and F1 = 0.960 (late fusion), with late fusion reducing errors by 26\% relative to RGB alone.
+
+    \item We demonstrate that frozen self-supervised features transfer effectively across spectral modalities: DINOv2-based thermal classification (F1 = 0.906) outperforms the best thermal time-series method (SVM F1 = 0.678) by +0.228, showing that visual foundation model features capture richer material signatures from thermal imagery than handcrafted temporal statistics.
+
+    \item We benchmark eight thermal time-series classification methods---including SVM, recurrent networks (BiLSTM, BiGRU), convolutional architectures (TCN, 1D~CNN, InceptionTime), Transformer, and MiniRocket---establishing a baseline where SVM with five statistical features (F1 = 0.678) achieves competitive performance with deep learning approaches, and the top five methods outperform the peak histogram baseline of \citet{GUNDUPALLI201713} (F1 = 0.550).
 
     \item We release ThermalRGBTrash, the first dataset containing registered RGB-thermal video pairs with thermal signatures for conveyor-based waste classification research, comprising 550 tracked trajectories across four material classes.
 \end{enumerate}
 
 \section{System Overview}\label{sec:system_overview}
-In Figure \ref{fig:technical_drawing_of_conveyor.png}, the proposed system consisting of three major parts (conveyor module, heating module, and data acquisition module) is shown. The conveyor module consists of a conveyor belt (160 cm $\times$ 40 cm) operating at 1.8 cm/s. The heating module includes a 2500 Watt electric heater positioned 60 cm above the conveyor belt. The heater is directed towards the conveyor and surrounded by isolators that concentrate heat on a specific area, which is called the heating zone. Objects moving on the conveyor undergo two sequential stages: first, an active heating stage where objects pass through the heating zone, followed by a passive cooling stage at ambient conditions. Observing an object undergoing these stages reveals its thermal characteristics. For data acquisition, a thermal camera (FLIR T420, 320 $\times$ 240 resolution) and an RGB camera (1280 $\times$ 720 resolution) are used in tandem at 30 FPS, with spatial correspondence established via homography transformation. The experimental setup represents a controlled laboratory environment designed to isolate thermal material signatures; key differences from industrial Material Recovery Facilities include single-object scenes, controlled ambient lighting, and lower throughput.
+In Figure \ref{fig:technical_drawing_of_conveyor.png}, the proposed system consisting of three major parts (conveyor module, heating module, and data acquisition module) is shown. The conveyor module consists of a conveyor belt (160 cm $\times$ 40 cm) operating at 1.8 cm/s. The heating module includes a 2500 Watt electric heater positioned 60 cm above the conveyor belt. The heater is directed towards the conveyor and surrounded by isolators that concentrate heat on a specific area, which is called the heating zone. Objects moving on the conveyor undergo two sequential stages: first, an active heating stage where objects pass through the heating zone, followed by a passive cooling stage at ambient conditions. Observing an object undergoing these stages reveals its thermal characteristics. For data acquisition, a thermal camera (FLIR T420, 320 $\times$ 240 resolution) and an RGB camera (1280 $\times$ 720 resolution) are used in tandem at 30 FPS, with spatial correspondence established via homography transformation. The experimental setup represents a controlled laboratory environment designed to isolate thermal material signatures; key differences from industrial Material Recovery Facilities include low object density (typically 1--4 objects simultaneously), controlled ambient lighting, and lower throughput.
 
-Videos obtained from the cameras are aligned in both spatial and temporal domains. The spatial alignment results in a homography matrix (H) that encapsulates the geometric transformation from the RGB image to the thermal image. In the temporal domain, alignment involves establishing a frame-to-frame mapping between the thermal and RGB video frames. This frame-to-frame correspondence is necessary to overcome two challenges in the proposed setup: the difficulty in simultaneously initiating capture on both cameras and the unreliability of embedded frame timestamps, which prevent their use for direct frame matching. The 16$\times$ resolution difference between the cameras affects the registration pipeline: RGB frames are warped to thermal resolution, preserving thermal pixel fidelity at the cost of RGB spatial detail.
+Videos obtained from the cameras are aligned in both spatial and temporal domains. The spatial alignment results in a homography matrix (H) that encapsulates the geometric transformation from the RGB image to the thermal image. In the temporal domain, alignment involves establishing a frame-to-frame mapping between the thermal and RGB video frames. This frame-to-frame correspondence is necessary to overcome two challenges in the proposed setup: the difficulty in simultaneously initiating capture on both cameras and the unreliability of embedded frame timestamps, which prevent their use for direct frame matching. The ${\sim}$12$\times$ resolution difference between the cameras (in total pixels) affects the registration pipeline: RGB frames are warped to thermal resolution, preserving thermal pixel fidelity at the cost of RGB spatial detail.
 
-Once spatial and temporal alignments are established, the next step is instance segmentation: to find the contours of MSW moving on the conveyor, frames of the RGB video are segmented. RGB images are used for segmentation due to the higher spatial resolution of the RGB camera and the extensive availability of segmentation models pre-trained on RGB datasets. The masks obtained, which identify the contours of MSW, on RGB images are mapped onto thermal images using H so that the average pixel intensity for each MSW can be tracked while moving on the conveyor. Tracking the average of pixel values within a mask as the MSW move on the conveyor results in an array of values which indicates the temperature change of the MSW. The temperature change of MSW as they move on the conveyor is treated as a time series which is used for classification of the object according to material type. The complete computational pipeline is illustrated in Figure~\ref{fig:pipeline}. In addition to thermal intensity time-series, the pipeline extracts per-frame class probability distributions from the RGB segmentation model, enabling analysis of RGB-based classification performance alongside thermal-based approaches.
+Once spatial and temporal alignments are established, the next step is instance segmentation: to find the contours of MSW moving on the conveyor, frames of the RGB video are segmented. RGB images are used for segmentation due to the higher spatial resolution of the RGB camera and the extensive availability of segmentation models pre-trained on RGB datasets. The masks obtained on RGB images are mapped onto thermal images using $H$, enabling both modalities to share the same per-object tracklets. The complete feature extraction pipeline is illustrated in Figure~\ref{fig:pipeline}. For classification, we employ a frozen DINOv2 ViT-L/14 backbone~\citep{oquab2024dinov2} to extract visual features from masked object crops in both RGB and thermal modalities, aggregated via learnable attention pooling into per-tracklet representations (detailed in Section~\ref{sec:dinov2_pipeline}). As a complementary baseline, we also extract thermal intensity time-series by tracking the mean pixel intensity within each warped mask over time, capturing material-specific heating and cooling dynamics for time-series classification (Section~\ref{sec:thermal_classification}).
 
 \begin{figure}[t]
     \centering
@@ -229,60 +236,65 @@ Once spatial and temporal alignments are established, the next step is instance 
                         align=center, font=\small},
             rgbbox/.style={rectangle, draw=blue!60, fill=blue!5, minimum width=2.6cm,
                           minimum height=0.55cm, align=center, font=\small},
-            emphbox/.style={rectangle, draw=red!70, line width=1.5pt, fill=red!5,
-                           minimum width=2.6cm, minimum height=0.55cm,
-                           align=center, font=\small\bfseries},
+            thermalbox/.style={rectangle, draw=red!60, fill=red!5, minimum width=2.6cm,
+                          minimum height=0.55cm, align=center, font=\small},
+            frozenbox/.style={rectangle, draw=gray!60, fill=gray!10, minimum width=2.6cm,
+                           minimum height=0.55cm, align=center, font=\small},
             arrow/.style={->, >=stealth, thick},
-            redarrow/.style={->, >=stealth, thick, red!70, line width=1.2pt},
-            scale=0.85
+            redarrow/.style={->, >=stealth, thick, red!60, line width=1.0pt},
+            bluearrow/.style={->, >=stealth, thick, blue!60, line width=1.0pt},
+            scale=0.82
         ]
 
         % ===== INPUT LAYER =====
-        \node[rgbbox] (rgb) at (-5,0) {RGB Video};
-        \node[box, fill=red!10] (thermal) at (5,0) {Thermal Video};
+        \node[rgbbox] (rgb) at (-4.5,0) {RGB Video};
+        \node[thermalbox] (thermal) at (4.5,0) {Thermal Video};
 
         % ===== REGISTRATION (uses both) =====
-        \node[box, below=1.4cm of $(rgb)!0.5!(thermal)$, minimum width=2.2cm] (reg) {Temporal \& Spatial\\Registration\\(SuperPoint-SuperGlue)};
+        \node[box, below=1.2cm of $(rgb)!0.5!(thermal)$, minimum width=2.2cm] (reg) {Temporal \& Spatial\\Registration\\(SuperPoint-SuperGlue)};
 
         % ===== RGB-ONLY PROCESSING PATH =====
         \node[rgbbox, below=0.5cm of reg] (det) {Segmentation (RGB)\\Mask R-CNN + NMS};
         \node[rgbbox, below=0.5cm of det] (track) {Tracking (RGB)\\OC-SORT};
 
         % ===== TRACKING OUTPUT: Trajectories =====
-        \node[rgbbox, below=0.6cm of track, minimum width=3.2cm] (traj) {Trajectories (RGB)\\(masks + track IDs)};
+        \node[rgbbox, below=0.6cm of track, minimum width=3.2cm] (traj) {Trajectories\\(masks + track IDs)};
 
-        % ===== SPLIT FROM TRAJECTORIES =====
-        % Calculate y-position below traj, use x from rgb/thermal
-        \path (traj.south) ++(0,-1.5) coordinate (below_traj);
-        % Left: RGB probabilities (x-aligned with RGB Video)
-        \node[rgbbox] at (-5,0 |- below_traj) (rgb_prob) {RGB Probability\\Sequences\\$P(\text{class}|t)$ per track};
-        % Right: Thermal intensity values (x-aligned with Thermal Video)
-        \node[emphbox, font=\small] at (5,0 |- below_traj) (thermal_ext) {Thermal Intensity\\Values\\$I(t)$ per track};
+        % ===== FEATURE EXTRACTION =====
+        \path (traj.south) ++(0,-1.3) coordinate (below_traj);
+        \node[frozenbox] at (-4.5,0 |- below_traj) (rgb_dino) {DINOv2 (frozen)\\RGB [CLS] features};
+        \node[thermalbox] at (4.5,0 |- below_traj) (th_dino) {DINOv2 (frozen)\\Thermal [CLS] features};
+
+        % ===== FUSION + CLASSIFICATION =====
+        \path (below_traj) ++(0,-1.5) coordinate (below_feat);
+        \node[box, draw=purple!60, fill=purple!5, minimum width=3.0cm] at (0,0 |- below_feat) (fusion) {Attention Pool + MLP\\(late fusion / single-modal)};
+
+        \path (below_feat) ++(0,-1.2) coordinate (below_fusion);
+        \node[box, minimum width=3.0cm] at (0,0 |- below_fusion) (output) {Material class\\(glass, metal, paper, plastic)};
 
         % ===== ARROWS =====
-        % Registration inputs (both videos feed into registration)
         \draw[arrow] (rgb) -- (reg);
         \draw[arrow] (thermal) -- (reg);
+        \draw[bluearrow] (reg) -- (det);
+        \draw[bluearrow] (det) -- (track);
+        \draw[bluearrow] (track) -- (traj);
 
-        % RGB video to RGB Probability Sequences (straight line)
-        \draw[arrow, blue!60] (rgb) -- (rgb_prob);
+        % Trajectories split to both DINOv2 branches
+        \draw[bluearrow] (traj) -| (rgb_dino);
+        \draw[arrow] (traj) -| (th_dino) node[pos=0.25, above, font=\small] {warp($H$)};
 
-        % RGB processing path
-        \draw[arrow, blue!60] (reg) -- (det);
-        \draw[arrow, blue!60] (det) -- (track);
+        % RGB video feeds DINOv2 RGB
+        \draw[bluearrow] (rgb) -- (rgb_dino);
+        % Thermal video feeds DINOv2 Thermal
+        \draw[redarrow] (thermal) -- (th_dino);
 
-        % Tracking to Trajectories
-        \draw[arrow, blue!60] (track) -- (traj);
-
-        % Trajectories split to RGB probabilities and Thermal Extraction
-        \draw[arrow] (traj) -| (rgb_prob);
-        \draw[arrow] (traj) -| (thermal_ext) node[pos=0.25, above, font=\small] {warp($H$)};
-
-        % Thermal video to extraction (straight line)
-        \draw[redarrow] (thermal) -- (thermal_ext);
+        % Features to fusion
+        \draw[bluearrow] (rgb_dino) -- (fusion);
+        \draw[redarrow] (th_dino) -- (fusion);
+        \draw[arrow] (fusion) -- (output);
 
         \end{tikzpicture}
-    \caption{Computational pipeline for feature extraction. Segmentation and tracking operate on RGB frames only; the resulting trajectories enable extraction of per-track class probability sequences $P(\text{class}|t)$ and thermal intensity time-series $I(t)$ via homography transformation. The thermal output encodes material-specific thermal characteristics used for time-series classification.}
+    \caption{Complete computational pipeline. Segmentation and tracking operate on RGB frames; the resulting trajectories are used to extract masked crops from both RGB and thermal frames. Frozen DINOv2 ViT-L/14 encodes crops into [CLS] feature vectors, which are aggregated via learnable attention pooling and classified by an MLP head. In late fusion mode, modality-specific attention pools are concatenated before classification.}
     \label{fig:pipeline}
 \end{figure}
 
@@ -312,20 +324,22 @@ We release ThermalRGBTrash, a multimodal dataset for RGB-thermal waste classific
 \begin{table}[h!]
     \centering
     \caption{ThermalRGBTrash dataset composition: segmentation instances (left) and classification trajectories (right).}\label{tab:dataset_combined}
-    \begin{tabular}{lrr|lrrrr}
+    \begin{tabular}{lrr|lrr}
         \hline
-        \multicolumn{3}{c|}{\textbf{Segmentation}} & \multicolumn{5}{c}{\textbf{Classification}} \\
-        \textbf{Class} & \textbf{Count} & \textbf{\%} & \textbf{Split} & \textbf{Glass} & \textbf{Metal} & \textbf{Paper} & \textbf{Plastic} \\
+        \multicolumn{3}{c|}{\textbf{Segmentation}} & \multicolumn{3}{c}{\textbf{Classification}} \\
+        \textbf{Class} & \textbf{Count} & \textbf{\%} & \textbf{Class} & \textbf{Count} & \textbf{\%} \\
         \hline
-        Metal   & 2,277 & 57.6 & Train (60\%) & 79 & 79 & 59 & 113 \\
-        Plastic & 771   & 19.5 & Val (20\%)   & 26 & 26 & 20 & 38 \\
-        Paper   & 659   & 16.7 & Test (20\%)  & 27 & 26 & 19 & 38 \\
-        Glass   & 246   & 6.2  & \textbf{Total} & \textbf{132} & \textbf{131} & \textbf{98} & \textbf{189} \\
+        Metal   & 2,277 & 57.6 & Glass   & 132 & 24.0 \\
+        Plastic & 771   & 19.5 & Metal   & 131 & 23.8 \\
+        Paper   & 659   & 16.7 & Paper   & 98  & 17.8 \\
+        Glass   & 246   & 6.2  & Plastic & 189 & 34.4 \\
+        \hline
+        \textbf{Total} & \textbf{3,953} & \textbf{100} & \textbf{Total} & \textbf{550} & \textbf{100} \\
         \hline
     \end{tabular}
 \end{table}
 
-Object trajectories are partitioned into stratified train/validation/test splits (60/20/20) with fixed random seed, ensuring proportional class representation across splits. Each trajectory comprises thermal intensity measurements capturing material-specific thermal signatures.
+For classification, we employ 5-fold stratified cross-validation (StratifiedKFold, shuffle=True, random\_state=42) on all 550 trajectories, ensuring each tracklet is evaluated exactly once across folds. For single-split training, trajectories are partitioned into 80/20 train/validation splits stratified by class. Each trajectory comprises both RGB frames with instance segmentation masks and thermal intensity measurements capturing material-specific thermal signatures.
 
 \subsection{Image Registration}\label{subsec:Img_reg}
 RGB and thermal video streams must be registered in both spatial and temporal domains to enable accurate thermal signature extraction: spatial alignment ensures that segmentation masks obtained from RGB frames correctly delineate object boundaries in the thermal domain, while temporal alignment establishes frame-to-frame correspondences necessary for constructing per-track thermal time-series. Spatial registration establishes pixel correspondence between RGB and thermal frames; temporal registration identifies frame-to-frame matches between unsynchronized video streams. Both employ feature-based approaches: extract and match features, then select parameters minimizing the designed error metrics.
@@ -491,41 +505,64 @@ Per-class NMS (threshold $\tau_{\text{per-class}}$) eliminates redundant same-cl
 \end{figure}
 
 \subsection{Object Classification}
-This study evaluates object classification using both RGB and thermal domains independently. In the RGB domain, the segmentation network (Section~\ref{subsec:detection_tracking}) provides per-frame class predictions with associated probability distributions, which are aggregated across the object's track to derive an RGB-domain classification. In the thermal domain, classification is performed on the thermal intensity time-series within each object's tracked mask, capturing material-specific thermal signatures.
+This study evaluates object classification through two complementary approaches: (1)~a DINOv2-based pipeline that extracts frozen visual features from both RGB and thermal imagery, and (2)~thermal time-series classifiers operating on handcrafted statistical features. The DINOv2 pipeline is applied independently to each modality and as a late fusion architecture combining both, while the thermal time-series approach serves as a baseline quantifying the discriminative capacity of temporal thermal statistics.
 
-\subsubsection{RGB Domain Classification}\label{sec:rgb_classification}
-To assess the class-discriminative potential of RGB-based predictions, we analyze the full four-class probability distribution from each frame. Rather than relying on scalar confidence values, we examine how probability mass distributes across all classes, revealing both model certainty and systematic confusion patterns.
+\subsubsection{DINOv2 Feature Extraction Pipeline}\label{sec:dinov2_pipeline}
 
-Statistical analysis on training set of 330 tracked objects across four material classes reveals class-dependent recognition difficulty (Table~\ref{tab:spatial_class_summary}). Using the mean probability assigned to the correct class as our primary metric, glass achieves the highest correct probability, followed by metal, plastic, and paper. We define a separability index as the ratio of correct-class probability to the maximum wrong-class probability. Values above 50 indicate easy classification, while values below 25 indicate difficulty. Glass is the easiest one to discriminate, while metal and plastic require moderate discrimination effort; paper presents the greatest classification challenge.
+We employ DINOv2 ViT-L/14~\citep{oquab2024dinov2}, a self-supervised Vision Transformer~\citep{dosovitskiy2021vit} pretrained on 142M images, as a frozen feature backbone for material classification. The architecture, illustrated in Figure~\ref{fig:dinov2_pipeline}, processes tracked object sequences through three stages: feature extraction, temporal aggregation, and classification.
 
-\begin{table}[h]
-\centering
-\small
-\caption{Per-class classification metrics from probability distributions.}
-\label{tab:spatial_class_summary}
-\begin{tabular}{lcccc}
-\hline
-Class & N & $P_{correct}$ & Primary Confuser & Separability \\
-\hline
-Glass & 89 & 91.1\% & Plastic (3.1\%) & 109.2 \\
-Metal & 60 & 82.6\% & Plastic (5.9\%) & 47.5 \\
-Plastic & 118 & 69.4\% & Paper (11.1\%) & 25.6 \\
-Paper & 49 & 60.5\% & Plastic (20.2\%) & 22.2 \\
-\hline
-\end{tabular}
-\end{table}
-
-\begin{figure}[h]
+\begin{figure}[t]
     \centering
-    \includegraphics[width=0.7\textwidth]{images/spatial_prob_confusion_heatmap.png}
-    \caption{Mean probability distribution by ground truth class, revealing systematic model confusion patterns. The segmentation model assigns high probability to the correct class for glass (91.1\%) and metal (82.6\%), but exhibits substantial paper-plastic bidirectional confusion: paper objects leak 22.6\% probability to plastic, while plastic objects leak 14.2\% to paper.}
-    \label{fig:spatial_confusion}
+    \begin{tikzpicture}[
+        node distance=0.5cm,
+        box/.style={rectangle, draw, minimum width=2.2cm, minimum height=0.5cm, align=center, font=\small},
+        frozenbox/.style={rectangle, draw=gray!60, fill=gray!10, minimum width=2.2cm, minimum height=0.5cm, align=center, font=\small},
+        trainbox/.style={rectangle, draw=blue!60, fill=blue!10, minimum width=2.2cm, minimum height=0.5cm, align=center, font=\small},
+        arrow/.style={->, >=stealth, thick},
+        scale=0.82
+    ]
+    % Input
+    \node[box] (video) at (0,0) {Video};
+    \node[frozenbox, right=0.4cm of video] (mrcnn) {Mask R-CNN\\(frozen)};
+    \node[frozenbox, right=0.4cm of mrcnn] (ocsort) {OC-SORT};
+    \node[box, right=0.4cm of ocsort] (crop) {Masked Crop\\518$\times$518};
+    \node[frozenbox, right=0.4cm of crop] (dino) {DINOv2\\ViT-L/14\\(frozen)};
+    \node[trainbox, right=0.4cm of dino] (pool) {Attention\\Pool};
+    \node[trainbox, right=0.4cm of pool] (mlp) {MLP\\Head};
+    \node[box, right=0.4cm of mlp] (out) {4-class\\logits};
+
+    \draw[arrow] (video) -- (mrcnn);
+    \draw[arrow] (mrcnn) -- (ocsort);
+    \draw[arrow] (ocsort) -- (crop);
+    \draw[arrow] (crop) -- (dino);
+    \draw[arrow] (dino) -- node[above, font=\scriptsize] {$T{\times}1024$} (pool);
+    \draw[arrow] (pool) -- node[above, font=\scriptsize] {$1{\times}1024$} (mlp);
+    \draw[arrow] (mlp) -- (out);
+    \end{tikzpicture}
+    \caption{DINOv2-based single-modal classification pipeline. Gray boxes denote frozen components; blue boxes denote trainable modules (${\sim}$528K parameters). For each tracklet, 8 frames are uniformly sampled, masked-cropped to 518$\times$518 with gray fill (128), and encoded by frozen DINOv2 into [CLS] tokens. Attention pooling aggregates the temporal sequence into a single representation for the MLP classifier.}
+    \label{fig:dinov2_pipeline}
 \end{figure}
 
-The probability confusion matrix in Figure~\ref{fig:spatial_confusion} reveals systematic failure modes. The critical confusion pair is paper$\leftrightarrow$plastic, with bidirectional probability leakage (22.6\% paper$\rightarrow$plastic, 14.2\% plastic$\rightarrow$paper). This confusion in the RGB domain motivates exploration of thermal signatures, where paper and plastic may exhibit distinct thermal responses that resolve this ambiguity.
+\paragraph{Feature extraction.} For each tracklet, $T=8$ frames are uniformly sampled from the tracked sequence. Per-frame processing applies the instance segmentation mask to isolate the object, crops to the bounding box, resizes to $518 \times 518$ pixels (divisible by the ViT patch size of 14), and fills masked background regions with neutral gray (pixel value 128) to avoid contaminating features after DINOv2's input normalization. The frozen DINOv2 ViT-L/14 encodes each frame into a 1024-dimensional [CLS] token, yielding a $T \times 1024$ feature matrix per tracklet. Since the backbone is frozen, features are precomputed once and cached to disk, enabling rapid training iterations without loading DINOv2.
 
-\subsubsection{Thermal Domain Classification}\label{sec:thermal_classification}
-To assess the class-discriminative potential of thermal signatures, we extract five features from each object's thermal time-series: mean intensity ($\mu_I$), median intensity ($\tilde{I}$), standard deviation ($\sigma_I$), rise time ($t_r$), and fall time ($t_f$). These features capture complementary aspects of thermal behavior that differ systematically across material classes.
+\paragraph{Attention pooling.} The temporal sequence of [CLS] tokens is aggregated via learnable attention pooling following the attention-based multiple instance learning formulation of~\citet{ilse2018attention}. A two-layer projection network $\mathbf{a} = \mathbf{w}^\top \tanh(\mathbf{V} \mathbf{h}_t)$ computes scalar attention scores, where $\mathbf{V} \in \mathbb{R}^{256 \times 1024}$ and $\mathbf{w} \in \mathbb{R}^{256}$ are learnable parameters. Temperature-scaled softmax ($\tau = 1.0$) converts scores to weights: $\alpha_t = \exp(a_t/\tau) / \sum_{t'} \exp(a_{t'}/\tau)$. The pooled representation is $\mathbf{z} = \sum_t \alpha_t \mathbf{h}_t \in \mathbb{R}^{1024}$. A boolean mask supports variable-length sequences.
+
+\paragraph{MLP head.} The classifier applies LayerNorm(1024) $\rightarrow$ Linear(1024, 256) $\rightarrow$ GELU $\rightarrow$ Dropout(0.3) $\rightarrow$ Linear(256, 4), producing four-class logits. The complete trainable module (attention pool + MLP head) comprises ${\sim}$528K parameters.
+
+\paragraph{Thermal modality.} The same architecture is applied to thermal imagery. Thermal frames (grayscale LWIR) are replicated to three channels for DINOv2 compatibility. RGB segmentation masks are warped into thermal space via the homography $H$ (Section~\ref{subsec:Img_reg}), and the same masked-crop-resize-encode pipeline produces thermal [CLS] features cached separately.
+
+\subsubsection{Late Fusion Architecture}\label{sec:late_fusion}
+
+To exploit complementary information from both modalities, we propose a late fusion architecture that combines pre-cached RGB and thermal features via modality-specific attention pooling and a shared classification head:
+\begin{equation}
+    \mathbf{z}_{\text{fused}} = [\text{AttnPool}_{\text{RGB}}(\mathbf{H}^{\text{RGB}}); \; \text{AttnPool}_{\text{Thermal}}(\mathbf{H}^{\text{Thermal}})] \in \mathbb{R}^{2048}
+\end{equation}
+where $[\cdot \,; \cdot]$ denotes concatenation. Each modality has an independent attention pooling module, allowing the model to learn modality-specific temporal weighting patterns. The fused representation is classified by a shared MLP head: LayerNorm(2048) $\rightarrow$ Linear(2048, 256) $\rightarrow$ GELU $\rightarrow$ Dropout(0.3) $\rightarrow$ Linear(256, 4). The late fusion model comprises ${\sim}$1.05M trainable parameters (two attention pools + wider MLP head) and trains exclusively on pre-cached features from both modalities.
+
+\subsubsection{Thermal Time-Series Classification}\label{sec:thermal_classification}
+As a complementary approach, we evaluate classification based on handcrafted features from thermal intensity time-series, providing a baseline that quantifies the discriminative capacity of temporal thermal statistics independent of visual foundation models.
+
+We extract five features from each object's thermal time-series: mean intensity ($\mu_I$), median intensity ($\tilde{I}$), standard deviation ($\sigma_I$), rise time ($t_r$), and fall time ($t_f$). These features capture complementary aspects of thermal behavior that differ systematically across material classes.
 
 The temporal features capture heating and cooling dynamics: \textit{rise time} ($t_r$) measures frames to reach 70\% of peak intensity, while \textit{fall time} ($t_f$) measures frames from peak until cooling below 70\%. Table~\ref{tab:thermal_class_summary} presents per-class thermal statistics for the 330 training tracks. Glass occupies the low end of the intensity spectrum ($\mu_I = 61.8$) with minimal variability ($\sigma_I = 12.6$). Plastic exhibits the highest intensity ($\mu_I = 100.1$) and longest heat retention ($t_f = 631$ frames). Paper shows the highest thermal variability ($\sigma_I = 39.9$). Metal falls in the intermediate range ($\mu_I = 86.1$) with high variability ($\sigma_I = 31.2$), causing feature space overlap with adjacent classes.
 
@@ -540,8 +577,8 @@ Class & $\mu_I$ & $\tilde{I}$ & $\sigma_I$ & $t_r$ (frames) & $t_f$ (frames) \\
 \hline
 Glass & 61.8 $\pm$ 13.4 & 64.0 $\pm$ 13.6 & 12.6 $\pm$ 4.2 & 766 $\pm$ 552 & 201 $\pm$ 357 \\
 Metal & 86.1 $\pm$ 20.9 & 78.6 $\pm$ 18.3 & 31.2 $\pm$ 18.2 & 729 $\pm$ 559 & 368 $\pm$ 242 \\
-Plastic & 100.1 $\pm$ 23.0 & 97.0 $\pm$ 22.3 & 32.1 $\pm$ 12.6 & 487 $\pm$ 182 & 631 $\pm$ 259 \\
 Paper & 95.0 $\pm$ 25.9 & 86.5 $\pm$ 29.7 & 39.9 $\pm$ 14.7 & 496 $\pm$ 213 & 359 $\pm$ 150 \\
+Plastic & 100.1 $\pm$ 23.0 & 97.0 $\pm$ 22.3 & 32.1 $\pm$ 12.6 & 487 $\pm$ 182 & 631 $\pm$ 259 \\
 \hline
 \end{tabular}
 \end{table}
@@ -567,9 +604,15 @@ Paper & 95.0 $\pm$ 25.9 & 86.5 $\pm$ 29.7 & 39.9 $\pm$ 14.7 & 496 $\pm$ 213 & 35
 
 The thermal feature space exhibits class-dependent separability, as shown in Figure~\ref{fig:thermal_features}. Glass and plastic occupy opposite ends of the intensity spectrum with a 38-unit gap ($\mu_I = 61.8$ vs.\ $100.1$), enabling clear discrimination. Metal ($\mu_I = 86.1$) and paper ($\mu_I = 95.0$) occupy intermediate positions with substantial overlap, consistent with these classes being the most challenging to classify. Additional separation is provided by temporal dynamics: plastic shows the longest fall time ($t_f = 631$ frames), while glass cools most rapidly ($t_f = 201$ frames).
 
+Eight classification methods are evaluated on the thermal time-series: SVM with the five statistical features, recurrent networks (BiLSTM, BiGRU), convolutional architectures (TCN, 1D~CNN, InceptionTime), Transformer, and MiniRocket. Details of the thermal time-series experimental protocol are given in Section~\ref{subsec:protocol}.
+
 \subsubsection{Experimental Protocol}\label{subsec:protocol}
 
-To ensure methodologically rigorous comparison, all deep learning classifiers share identical experimental conditions: (i) the stratified train, validation, test split defined in Table~\ref{tab:dataset_combined} with fixed random seed (42), (ii) Bayesian hyperparameter optimization via Optuna (20 trials, 5-fold cross-validation), (iii) unified training procedures (AdamW optimizer, ReduceLROnPlateau scheduler, early stopping with patience 15), (iv) consistent time-series augmentation (time masking, magnitude scaling, time warping, cutout), and (v) class-weighted cross-entropy loss to address label imbalance.
+\paragraph{DINOv2-based pipelines.}\label{subsec:protocol_dinov2}
+All three DINOv2-based pipelines (RGB, thermal, late fusion) are evaluated via 5-fold stratified cross-validation (StratifiedKFold, shuffle=True, random\_state=42) on all 550 tracklets, ensuring each tracklet is evaluated exactly once across folds. Training uses AdamW~\citep{loshchilov2019adamw} (lr=$10^{-3}$, weight\_decay=$10^{-4}$) with cross-entropy loss and label smoothing of 0.1~\citep{muller2019labelsmoothing}. The learning rate schedule combines linear warmup over 5 epochs with cosine annealing over 15 epochs, for a total of 20 training epochs. Batch size is 8, with $T=8$ frames uniformly sampled per tracklet. Seeds are set to $42 + \text{fold\_idx}$ for reproducibility. We report mean accuracy and mean macro F1 ($\pm$ std across folds), per-class F1 (pooled across all folds), and total error count.
+
+\paragraph{Thermal time-series classifiers.}\label{subsec:protocol_thermal}
+To ensure methodologically rigorous comparison, all deep learning classifiers for thermal time-series share identical experimental conditions: (i)~a stratified 60/20/20 train/validation/test split with fixed random seed (42), (ii)~Bayesian hyperparameter optimization via Optuna (20 trials, 5-fold cross-validation), (iii)~unified training procedures (AdamW optimizer, ReduceLROnPlateau scheduler, early stopping with patience 15), (iv)~consistent time-series augmentation (time masking, magnitude scaling, time warping, cutout), and (v)~class-weighted cross-entropy loss to address label imbalance.
 
 \section{Results and Discussion}
 
@@ -579,12 +622,12 @@ Registration accuracy was evaluated comprehensively across all 19 experiments, a
 \begin{equation}\label{eqn:RE_spatial_l2}
     RE_{\text{spatial}} = \frac{1}{M} \sum_{i=1}^{M} \|\tilde{p}_i - \hat{p}_i\|_2
 \end{equation}
-where $M$ is the number of inlier matches (RANSAC threshold 10\,px), $\tilde{p}_i$ are detected SuperPoint feature positions in the thermal image, and $\hat{p}_i = H p_i$ are the corresponding warped positions from the RGB image. Temporal registration error aggregates feature displacement across all $N_w$ frame matches:
+where $M$ is the number of inlier matches (RANSAC threshold 10\,px), $\tilde{p}_i$ are detected SuperPoint feature positions in the thermal image, and $\hat{p}_i = H p_i$ are the corresponding warped positions from the RGB image. Temporal registration error averages feature displacement across all $N_w$ frame matches:
 \begin{equation}
-    RE_{\text{temporal}} = \sum_{i=1}^{N_w} \bar{d}(i, j^*_i)
+    RE_{\text{temporal}} = \frac{1}{N_w} \sum_{i=1}^{N_w} \bar{d}(i, j^*_i)
     \label{eqn:temporal_error}
 \end{equation}
-where $j^*_i$ is the optimal matching thermal frame for RGB frame $i$ (Equation~\ref{eqn:optimal_frame}), and $\bar{d}(i, j^*_i)$ is the mean Euclidean distance between matched SuperPoint-SuperGlue keypoints in that frame pair. For each RGB frame, SuperPoint extracts keypoints in both the warped RGB frame and all candidate thermal frames within the search window; SuperGlue matches corresponding keypoints across modalities. The mean displacement $\bar{d}$ quantifies alignment quality for each matched pair, with lower values indicating better spatial correspondence at the selected temporal offset. We report Mean Temporal Registration Error (MTRE = $RE_{\text{temporal}}/N_w$), Jitter Coefficient quantifying frame-to-frame stability:
+where $j^*_i$ is the optimal matching thermal frame for RGB frame $i$ (Equation~\ref{eqn:optimal_frame}), and $\bar{d}(i, j^*_i)$ is the mean Euclidean distance between matched SuperPoint-SuperGlue keypoints in that frame pair. For each RGB frame, SuperPoint extracts keypoints in both the warped RGB frame and all candidate thermal frames within the search window; SuperGlue matches corresponding keypoints across modalities. The mean displacement $\bar{d}$ quantifies alignment quality for each matched pair, with lower values indicating better spatial correspondence at the selected temporal offset. We additionally report Jitter Coefficient quantifying frame-to-frame stability:
 \begin{equation}
     JC = \frac{\sigma_{\Delta j}}{\mu_{|\Delta j|}}
     \label{eqn:jitter_coeff}
@@ -603,7 +646,7 @@ where $\Delta j = j^*_i - j^*_{i-1}$ represents consecutive matched frame differ
 & Inlier Rate (\%) & 99.1 & 0.8 & 99.3 & [97.2, 99.9] \\
 & Inlier Count & 143 & 38 & 137 & [89, 241] \\
 \midrule
-\multirow{4}{*}{Temporal} & MTRE (px) & 4.68 & 1.55 & 3.99 & [2.87, 8.85] \\
+\multirow{4}{*}{Temporal} & $RE_{\text{temporal}}$ (px) & 4.68 & 1.55 & 3.99 & [2.87, 8.85] \\
 & Jitter Coefficient & 1.87 & 0.34 & 1.79 & [1.35, 2.40] \\
 & Monotonicity Score & 0.458 & 0.08 & 0.46 & [0.31, 0.58] \\
 & Coverage & 0.9997 & 0.0004 & 0.9999 & [0.998, 1.0] \\
@@ -613,7 +656,7 @@ where $\Delta j = j^*_i - j^*_{i-1}$ represents consecutive matched frame differ
 
 Spatial registration achieved mean reprojection error of $2.27 \pm 0.48$ pixels (Equation~\ref{eqn:RE_spatial_l2}), with sub-3-pixel accuracy despite the cross-spectral modality gap between RGB and thermal imagery. The 99.1\% inlier rate confirms RANSAC successfully rejected outlier correspondences arising from cross-modal matching artifacts. At thermal resolution, this 2.27\,px error corresponds to 0.71\% of image width.
 
-Temporal registration achieved MTRE of $4.68 \pm 1.55$\,px across 281,439 frame pairs (Equation~\ref{eqn:temporal_error}), with per-experiment values ranging from 2.87\,px (best) to 8.85\,px (worst). Near-perfect coverage (99.97\%) indicates successful correspondence for virtually all frames. The Jitter Coefficient of $1.87 \pm 0.34$ (Equation~\ref{eqn:jitter_coeff}) quantifies temporal stability: a JC of 1.87 indicates that the standard deviation of consecutive frame differences equals 1.87 times their mean absolute value, reflecting moderate variability in frame-to-frame matching. The moderate Monotonicity Score (0.458) arises from NUC compensation: when Non-Uniformity Correction events cause the thermal camera to pause, the algorithm permits backward temporal jumps to maintain spatial correspondence.
+Temporal registration achieved $RE_{\text{temporal}} = 4.68 \pm 1.55$\,px across 281,439 frame pairs (Equation~\ref{eqn:temporal_error}), with per-experiment values ranging from 2.87\,px (best) to 8.85\,px (worst). Near-perfect coverage (99.97\%) indicates successful correspondence for virtually all frames. The Jitter Coefficient of $1.87 \pm 0.34$ (Equation~\ref{eqn:jitter_coeff}) quantifies temporal stability: a JC of 1.87 indicates that the standard deviation of consecutive frame differences equals 1.87 times their mean absolute value, reflecting moderate variability in frame-to-frame matching. The moderate Monotonicity Score (0.458) arises from NUC compensation: when Non-Uniformity Correction events cause the thermal camera to pause, the algorithm permits backward temporal jumps to maintain spatial correspondence.
 
 The total registration error (Equation~\ref{eqn:total_RE}) decomposes into spatial (32.7\%) and temporal (67.3\%) components, as visualized in Figure~\ref{fig:error_decomposition}. This reveals that temporal synchronization, rather than geometric transformation, constitutes the dominant error source, with practical implications: improvements to temporal synchronization (e.g., hardware triggering) would yield greater accuracy gains than further spatial refinement.
 
@@ -631,7 +674,7 @@ The total registration error (Equation~\ref{eqn:total_RE}) decomposes into spati
 \label{fig:error_decomposition}
 \end{figure}
 
-\subsection{Thermal Classification Results}
+\subsection{Thermal Time-Series Classification Results}
 \label{sec:thermal_results}
 
 We evaluate eight classification methods on 110 test tracks using thermal intensity time-series (Table~\ref{tab:thermal_classifier_comparison}). All deep learning methods used identical training protocols (Section~\ref{subsec:protocol}) to ensure fair comparison.
@@ -640,7 +683,7 @@ SVM with five statistical features achieves the highest F1 macro (0.678), closel
 
 \begin{table}[htbp]
 \centering
-\caption{Thermal classification performance comparison (n=110 test tracks). Best values in bold. F1 scores are macro-averaged; per-class columns show F1 scores.}
+\caption{Thermal time-series classification performance comparison (n=110 test tracks). Best values in bold. F1 scores are macro-averaged; per-class columns show F1 scores.}
 \label{tab:thermal_classifier_comparison}
 \begin{tabular}{@{}lcccccc@{}}
 \toprule
@@ -668,10 +711,69 @@ Per-class analysis reveals material-specific classification difficulty. Glass is
 
 To quantify the contribution of temporal dynamics beyond peak statistics, we implemented the peak histogram classifier of \citet{GUNDUPALLI201713}, which extracts peak intensity and $\pm$50-frame standard deviation. This baseline achieves F1 = 0.550, and the 0.128 pp gap versus SVM demonstrates that richer feature representations, including rise/fall time dynamics, provide additional material-discriminative information beyond peak statistics alone.
 
+\subsection{DINOv2-Based Classification Results}
+\label{sec:dinov2_results}
+
+Table~\ref{tab:dinov2_results} presents the main results of the DINOv2-based classification pipeline across all three configurations, evaluated via 5-fold stratified cross-validation on 550 tracklets.
+
+\begin{table}[htbp]
+\centering
+\caption{DINOv2-based classification results (5-fold stratified cross-validation, $n=550$ tracklets). Mean $\pm$ std across folds. Best values in bold.}
+\label{tab:dinov2_results}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+\textbf{Pipeline} & \textbf{Params} & \textbf{Mean Accuracy} & \textbf{Mean Macro F1} & \textbf{Errors} \\
+\midrule
+RGB & 528K & $0.9509 \pm 0.0093$ & $0.9507 \pm 0.0110$ & 27 \\
+Thermal & 528K & $0.9127 \pm 0.0384$ & $0.9056 \pm 0.0405$ & 48 \\
+\textbf{Late Fusion} & \textbf{1.05M} & $\mathbf{0.9636 \pm 0.0100}$ & $\mathbf{0.9602 \pm 0.0136}$ & \textbf{20} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Per-class F1 scores pooled across all folds (Table~\ref{tab:dinov2_perclass}) reveal consistent patterns across modalities.
+
+\begin{table}[htbp]
+\centering
+\caption{Per-class F1 scores for DINOv2-based pipelines (pooled across all 5 folds). Best per-class values in bold.}
+\label{tab:dinov2_perclass}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+\textbf{Class} & \textbf{RGB} & \textbf{Thermal} & \textbf{Late Fusion} & \textbf{Count} \\
+\midrule
+Glass & 0.985 & 0.970 & \textbf{0.992} & 132 \\
+Metal & 0.948 & 0.931 & \textbf{0.966} & 131 \\
+Paper & \textbf{0.932} & 0.804 & 0.920 & 98 \\
+Plastic & 0.938 & 0.917 & \textbf{0.964} & 189 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Modality analysis.} The RGB pipeline achieves macro F1 = 0.951 with 27 errors, demonstrating that frozen DINOv2 features provide strong material discrimination from visible-spectrum imagery alone. Glass is near-perfectly classified (F1 = 0.985) across all configurations. Paper remains the most challenging class, with paper$\leftrightarrow$plastic confusion persisting across all modalities. The thermal pipeline achieves F1 = 0.906 with 48 errors; paper classification drops notably (F1 = 0.804), indicating that thermal signatures do not fully resolve the paper--plastic ambiguity. However, the thermal pipeline's higher variance across folds ($\pm 0.0405$) suggests greater sensitivity to fold composition compared to RGB ($\pm 0.0110$).
+
+\paragraph{Late fusion.} Combining both modalities via the late fusion architecture (Section~\ref{sec:late_fusion}) achieves macro F1 = 0.960, reducing total errors by 26\% relative to RGB alone (20 vs.\ 27 errors). The improvement is most pronounced for glass (F1 = 0.992, near-perfect), metal (F1 = 0.966, +0.018 over RGB), and plastic (F1 = 0.964, +0.026 over RGB). Paper F1 (0.920) remains slightly below RGB (0.932), suggesting that thermal features introduce minor confusion for this class despite improving overall performance.
+
+\paragraph{Comparison with thermal time-series methods.} The DINOv2-based thermal pipeline (F1 = 0.906) substantially outperforms the best thermal time-series classifier (SVM F1 = 0.678) by +0.228. We note that the two approaches use different evaluation protocols: DINOv2 results are from 5-fold stratified CV on all 550 tracklets, while thermal time-series results are from a fixed 60/20/20 split evaluated on 110 test tracks; nonetheless, the magnitude of the gap (+0.228 F1) is sufficiently large that the conclusion is robust to protocol differences. Per-class improvements are consistent: glass improves from 0.786 to 0.970, metal from 0.490 to 0.931, paper from 0.732 to 0.804, and plastic from 0.703 to 0.917. This demonstrates that self-supervised visual features from a foundation model capture substantially richer material signatures from thermal imagery than handcrafted temporal statistics, despite the LWIR domain being far from DINOv2's visible-spectrum training distribution. Notably, the DINOv2 pipeline achieves these results with ${\sim}$528K trainable parameters and no hyperparameter search, while the thermal time-series classifiers required Optuna optimization with 20 trials per method.
 
 \section{Conclusion}
 
-This paper presented a thermal imaging framework for conveyor-based waste classification. The contributions are: (1) a spatial-temporal registration method achieving 2.27-pixel spatial and 4.68-pixel temporal alignment across 281,439 frame pairs without hardware synchronization; (2) a systematic benchmark of eight thermal classification methods on 550 tracked object trajectories, with SVM (F1 = 0.678) and BiGRU (F1 = 0.676) achieving the best performance; (3) evidence that sequence-based classification (SVM F1 = 0.678) outperforms peak histogram features (Gundupalli F1 = 0.550), confirming that temporal shape encodes material-discriminative information; and (4) release of ThermalRGBTrash, an RGB-thermal dataset of 550 registered object trajectories. The moderate classification performance (best F1 = 0.678) indicates that thermal signatures alone provide partial material discrimination, with glass most reliably classified (F1 = 0.786) and metal most challenging (F1 = 0.490).
+This paper presented a multi-modal framework for conveyor-based waste classification combining RGB and thermal imaging with self-supervised visual features. The main contributions and findings are:
+
+\begin{enumerate}
+    \item A spatial-temporal registration method achieving 2.27-pixel spatial and 4.68-pixel temporal alignment across 281,439 frame pairs without hardware synchronization, enabling accurate cross-modal feature extraction.
+
+    \item A DINOv2-based classification pipeline using frozen ViT-L/14 features with learnable attention pooling, achieving macro F1 = 0.951 (RGB), 0.906 (thermal), and 0.960 (late fusion) on 5-fold stratified cross-validation over 550 tracklets, with only ${\sim}$528K--1.05M trainable parameters.
+
+    \item Late fusion of RGB and thermal DINOv2 features reduces classification errors by 26\% relative to RGB alone (20 vs.\ 27 errors), with the largest gains on glass (F1 = 0.992) and plastic (F1 = 0.964).
+
+    \item Frozen self-supervised features transfer effectively across spectral modalities: DINOv2-based thermal classification (F1 = 0.906) outperforms the best thermal time-series method (SVM F1 = 0.678) by +0.228, demonstrating that visual foundation model features capture richer material signatures from LWIR imagery than handcrafted temporal statistics.
+
+    \item A benchmark of eight thermal time-series classification methods confirms that temporal dynamics encode material-discriminative information (SVM F1 = 0.678 vs.\ peak histogram baseline F1 = 0.550), establishing a baseline for the thermal modality.
+
+    \item Release of ThermalRGBTrash, an RGB-thermal dataset of 550 registered object trajectories with synchronized thermal time-series.
+\end{enumerate}
+
+Paper$\leftrightarrow$plastic confusion remains the primary failure mode across all modalities and approaches. Future work could explore: (1)~learnable fusion strategies (e.g., cross-attention between modalities) to better resolve confusing pairs, (2)~fine-tuning DINOv2 on domain-specific data to improve thermal feature quality, (3)~incorporating additional sensing modalities such as near-infrared spectroscopy for polymer-specific discrimination, and (4)~scaling the dataset to more material subtypes and industrial operating conditions.
 
 \bibliographystyle{elsarticle-harv}
 \bibliography{references} % Assumes a references.bib file
