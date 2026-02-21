@@ -1,0 +1,262 @@
+# Calibration metadata for all experiments
+# This file contains ROI coordinates, registration frames, and threshold values
+# Previously hardcoded in phd_library.py load_calibration_timestamps()
+
+experiments:
+  - id: '0761'
+    roi: {x: 350, y: 338, w: 432, h: 640}
+    registration: {eo_frame: 1000, th_frame: 700}
+    experiment_range: {eo_start: 700, eo_end: 1000, th_start: 1000}
+    lower_threshold: [15, 100, 140]
+
+  - id: '0767'
+    roi: {x: 194, y: 176, w: 312, h: 459}
+    registration: {eo_frame: 800, th_frame: 800}
+    experiment_range: {eo_start: 800, eo_end: 800, th_start: 800}
+    lower_threshold: [15, 100, 140]
+
+  - id: '0769'
+    roi: {x: 348, y: 238, w: 414, h: 734}
+    registration: {eo_frame: 500, th_frame: 450}
+    experiment_range: {eo_start: 450, eo_end: 500, th_start: 500}
+    lower_threshold: [25, 100, 140]
+
+  - id: '0771'
+    roi: {x: 294, y: 328, w: 432, h: 640}
+    registration: {eo_frame: 400, th_frame: 480}
+    experiment_range: {eo_start: 480, eo_end: 400, th_start: 400}
+    lower_threshold: [25, 100, 140]
+
+  - id: '0775'
+    roi: {x: 328, y: 334, w: 432, h: 640}
+    registration: {eo_frame: 120, th_frame: 700}
+    experiment_range: {eo_start: 700, eo_end: 120, th_start: 120}
+    lower_threshold: [15, 100, 140]
+
+  - id: '0780'
+    roi: {x: 188, y: 180, w: 308, h: 457}
+    registration: {eo_frame: 420, th_frame: 100}
+    experiment_range: {eo_start: 100, eo_end: 420, th_start: 420}
+    lower_threshold: [25, 100, 140]
+
+  - id: '0781'
+    roi: {x: 184, y: 180, w: 308, h: 457}
+    registration: {eo_frame: 400, th_frame: 100}
+    experiment_range: {eo_start: 100, eo_end: 400, th_start: 400}
+    lower_threshold: [15, 100, 140]
+
+  - id: '0782'
+    roi: {x: 124, y: 180, w: 308, h: 457}
+    registration: {eo_frame: 300, th_frame: 100}
+    experiment_range: {eo_start: 100, eo_end: 300, th_start: 300}
+    lower_threshold: [25, 100, 140]
+
+  - id: '0783'
+    roi: {x: 184, y: 180, w: 308, h: 457}
+    registration: {eo_frame: 500, th_frame: 100}
+    experiment_range: {eo_start: 100, eo_end: 500, th_start: 500}
+    lower_threshold: [15, 100, 140]
+
+  - id: '0784'
+    roi: {x: 184, y: 182, w: 310, h: 455}
+    registration: {eo_frame: 500, th_frame: 200}
+    experiment_range: {eo_start: 200, eo_end: 500, th_start: 500}
+    lower_threshold: [15, 100, 140]
+
+  - id: '0785'
+    roi: {x: 187, y: 180, w: 306, h: 456}
+    registration: {eo_frame: 500, th_frame: 100}
+    experiment_range: {eo_start: 100, eo_end: 500, th_start: 500}
+    lower_threshold: [25, 100, 140]
+
+  - id: '0786'
+    roi: {x: 284, y: 326, w: 436, h: 640}
+    registration: {eo_frame: 700, th_frame: 100}
+    experiment_range: {eo_start: 100, eo_end: 700, th_start: 700}
+    lower_threshold: [15, 100, 140]
+
+  - id: '0787'
+    roi: {x: 326, y: 336, w: 436, h: 640}
+    registration: {eo_frame: 700, th_frame: 100}
+    experiment_range: {eo_start: 100, eo_end: 700, th_start: 700}
+    lower_threshold: [25, 100, 140]
+
+  - id: '0788'
+    roi: {x: 328, y: 336, w: 436, h: 638}
+    registration: {eo_frame: 700, th_frame: 200}
+    experiment_range: {eo_start: 200, eo_end: 700, th_start: 700}
+    lower_threshold: [35, 100, 140]
+
+  - id: '0794'
+    roi: {x: 202, y: 178, w: 310, h: 466}
+    registration: {eo_frame: 900, th_frame: 700}
+    experiment_range: {eo_start: 700, eo_end: 900, th_start: 900}
+    lower_threshold: [15, 100, 140]
+
+  - id: '0795'
+    roi: {x: 186, y: 181, w: 306, h: 458}
+    registration: {eo_frame: 500, th_frame: 470}
+    experiment_range: {eo_start: 470, eo_end: 500, th_start: 500}
+    lower_threshold: [25, 100, 140]
+
+  - id: '0796'
+    roi: {x: 210, y: 182, w: 308, h: 460}
+    registration: {eo_frame: 500, th_frame: 900}
+    experiment_range: {eo_start: 900, eo_end: 500, th_start: 500}
+    lower_threshold: [25, 100, 140]
+
+  - id: '0797'
+    roi: {x: 222, y: 180, w: 310, h: 461}
+    registration: {eo_frame: 900, th_frame: 800}
+    experiment_range: {eo_start: 1584, eo_end: 24500, th_start: 726}
+    lower_threshold: [25, 100, 140]
+
+  - id: '0798'
+    roi: {x: 182, y: 200, w: 461, h: 310}
+    registration: {eo_frame: 700, th_frame: 500}
+    experiment_range: {eo_start: 554, eo_end: 27000, th_start: 291}
+    lower_threshold: [25, 100, 140]
+
+  - id: '0809'
+    roi: {x: 612, y: 222, w: 478, h: 289}
+    registration: {eo_frame: 1600, th_frame: 1600}
+    experiment_range: {eo_start: 1600, eo_end: 1600, th_start: 1600}
+    lower_threshold: [25, 135, 140]
+
+  - id: '0810'
+    roi: {x: 618, y: 218, w: 470, h: 300}
+    registration: {eo_frame: 600, th_frame: 1700}
+    experiment_range: {eo_start: 1700, eo_end: 600, th_start: 600}
+    lower_threshold: [25, 135, 140]
+
+  - id: '0811'
+    roi: {x: 614, y: 208, w: 474, h: 308}
+    registration: {eo_frame: 1000, th_frame: 900}
+    experiment_range: {eo_start: 1369, eo_end: 12500, th_start: 250}
+    lower_threshold: [25, 135, 140]
+
+  - id: '0812'
+    roi: {x: 614, y: 220, w: 472, h: 291}
+    registration: {eo_frame: 1700, th_frame: 1700}
+    experiment_range: {eo_start: 1700, eo_end: 1700, th_start: 1700}
+    lower_threshold: [25, 135, 140]
+
+  - id: '0815'
+    roi: {x: 614, y: 224, w: 476, h: 295}
+    registration: {eo_frame: 1500, th_frame: 1400}
+    experiment_range: {eo_start: 1400, eo_end: 1500, th_start: 1500}
+    lower_threshold: [25, 135, 140]
+
+  - id: '0819'
+    roi: {x: 636, y: 226, w: 458, h: 288}
+    registration: {eo_frame: 3500, th_frame: 1700}
+    experiment_range: {eo_start: 3743, eo_end: 15000, th_start: 2049}
+    lower_threshold: [25, 135, 140]
+
+  - id: '0820'
+    roi: {x: 636, y: 227, w: 459, h: 387}
+    registration: {eo_frame: 1500, th_frame: 1300}
+    experiment_range: {eo_start: 1684, eo_end: 16000, th_start: 1170}
+    lower_threshold: [35, 135, 140]
+
+  - id: '0821'
+    roi: {x: 636, y: 228, w: 459, h: 288}
+    registration: {eo_frame: 1500, th_frame: 1200}
+    experiment_range: {eo_start: 1605, eo_end: 13500, th_start: 1158}
+    lower_threshold: [25, 135, 140]
+
+  - id: '0822'
+    roi: {x: 648, y: 270, w: 462, h: 290}
+    registration: {eo_frame: 2000, th_frame: 1000}
+    experiment_range: {eo_start: 1693, eo_end: 14500, th_start: 935}
+    lower_threshold: [25, 135, 140]
+
+  - id: '0823'
+    roi: {x: 636, y: 225, w: 461, h: 495}
+    registration: {eo_frame: 2000, th_frame: 200}
+    experiment_range: {eo_start: 1876, eo_end: 17500, th_start: 284}
+    lower_threshold: [35, 135, 140]
+
+  - id: '0824'
+    roi: {x: 634, y: 221, w: 462, h: 287}
+    registration: {eo_frame: 1000, th_frame: 300}
+    experiment_range: {eo_start: 957, eo_end: 14500, th_start: 510}
+    lower_threshold: [25, 135, 140]
+
+  - id: '0834'
+    roi: {x: 570, y: 258, w: 416, h: 286}
+    registration: {eo_frame: 1650, th_frame: 2630}
+    experiment_range: {eo_start: 2630, eo_end: 1650, th_start: 1650}
+    lower_threshold: [35, 135, 140]
+
+  - id: '0836'
+    roi: {x: 638, y: 284, w: 348, h: 230}
+    registration: {eo_frame: 2300, th_frame: 2800}
+    experiment_range: {eo_start: 2178, eo_end: 22500, th_start: 1805}
+    lower_threshold: [35, 135, 140]
+
+  - id: '0837'
+    roi: {x: 638, y: 288, w: 351, h: 224}
+    registration: {eo_frame: 2000, th_frame: 2000}
+    experiment_range: {eo_start: 1841, eo_end: 17500, th_start: 1904}
+    lower_threshold: [25, 135, 140]
+
+  - id: '0840'
+    roi: {x: 624, y: 290, w: 344, h: 212}
+    registration: {eo_frame: 2000, th_frame: 2100}
+    experiment_range: {eo_start: 2570, eo_end: 7200, th_start: 1953}
+    lower_threshold: [25, 135, 140]
+
+  - id: '0841'
+    roi: {x: 628, y: 320, w: 349, h: 224}
+    registration: {eo_frame: 2500, th_frame: 2100}
+    experiment_range: {eo_start: 2399, eo_end: 16500, th_start: 1799}
+    lower_threshold: [25, 135, 140]
+
+  - id: '0842'
+    roi: {x: 646, y: 288, w: 348, h: 232}
+    registration: {eo_frame: 2500, th_frame: 2100}
+    experiment_range: {eo_start: 1876, eo_end: 12500, th_start: 1569}
+    lower_threshold: [25, 135, 140]
+
+  - id: '0843'
+    roi: {x: 612, y: 122, w: 363, h: 428}
+    registration: {eo_frame: 2200, th_frame: 1800}
+    experiment_range: {eo_start: 2175, eo_end: 13000, th_start: 1679}
+    lower_threshold: [25, 135, 140]
+
+  - id: '0844'
+    roi: {x: 626, y: 270, w: 344, h: 228}
+    registration: {eo_frame: 2000, th_frame: 1500}
+    experiment_range: {eo_start: 1833, eo_end: 17000, th_start: 1357}
+    lower_threshold: [25, 135, 140]
+
+  - id: '0831'
+    roi: {x: 595, y: 254, w: 429, h: 292}
+    registration: {eo_frame: 2000, th_frame: 1800}
+    experiment_range: {eo_start: 1800, eo_end: 2000, th_start: 2000}
+    lower_threshold: [35, 135, 140]
+
+  - id: '0801'
+    roi: {x: 672, y: 238, w: 440, h: 292}
+    registration: {eo_frame: 800, th_frame: 800}
+    experiment_range: {eo_start: 596, eo_end: 15000, th_start: 716}
+    lower_threshold: [35, 135, 140]
+
+  - id: '0802'
+    roi: {x: 676, y: 230, w: 434, h: 284}
+    registration: {eo_frame: 2000, th_frame: 2000}
+    experiment_range: {eo_start: 1678, eo_end: 20000, th_start: 1420}
+    lower_threshold: [35, 135, 140]
+
+  - id: '0852'
+    roi: {x: 600, y: 200, w: 400, h: 300}
+    registration: {eo_frame: 2050, th_frame: 1820}
+    experiment_range: {eo_start: 2050, eo_end: 20000, th_start: 1820}
+    lower_threshold: [25, 135, 140]
+
+  - id: '0854'
+    roi: {x: 600, y: 200, w: 400, h: 300}
+    registration: {eo_frame: 950, th_frame: 1450}
+    experiment_range: {eo_start: 950, eo_end: 20000, th_start: 1450}
+    lower_threshold: [25, 135, 140]

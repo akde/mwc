@@ -1,0 +1,30 @@
+# Alignment pipeline configuration
+# Used by run_alignment.py for homography computation and frame matching.
+
+matcher:
+  match_threshold: 0.2
+  use_gpu: true
+  keypoint_threshold: 0.0001
+
+homography:
+  ransac_threshold: 10.0
+  ransac_max_iters: 100000
+  ransac_confidence: 0.95
+  thermal_crop:
+    x1: 0
+    y1: 55
+    x2: 270
+    y2: 220
+
+frame_matching:
+  best_percent: 50
+  initial_window_length: 20
+  max_window_length: 200
+  adaptive_window: false
+  save_interval: 50
+
+# Path to calibration metadata (relative to material_classifier/)
+calibration_metadata: config/calibration_metadata.yaml
+
+# Base directory containing experiment folders (e.g. 0798/, 0799/, ...)
+downloads_dir: ~/Downloads

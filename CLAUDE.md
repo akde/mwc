@@ -58,10 +58,19 @@ Late fusion reduces errors by 26% vs RGB alone. Glass is near-perfect across all
 ```
 material_classifier/
 ├── __init__.py
+├── alignment/
+│   ├── __init__.py               # public API re-exports
+│   ├── matcher.py                # SuperGlueMatcher class (SuperPoint-SuperGlue wrapper)
+│   ├── experiment_metadata.py    # per-experiment calibration data loader
+│   ├── homography.py             # homography computation (frame extraction + RANSAC)
+│   ├── frame_matching.py         # temporal frame matching between RGB and thermal
+│   └── io.py                     # CSV reading/writing for frame matching results
 ├── config/
 │   ├── default.yaml              # RGB pipeline hyperparameters and paths
 │   ├── thermal.yaml              # thermal pipeline hyperparameters and paths
-│   └── fused.yaml                # late fusion pipeline hyperparameters and paths
+│   ├── fused.yaml                # late fusion pipeline hyperparameters and paths
+│   ├── alignment.yaml            # alignment pipeline configuration
+│   └── calibration_metadata.yaml # per-experiment ROI, registration frames, thresholds
 ├── tracking/
 │   ├── detector.py               # Detectron2 Mask R-CNN inference wrapper
 │   └── ocsort.py                 # OC-SORT tracker (with OCR + merge + dedup)
@@ -96,6 +105,7 @@ cross_validate.py                 # 5-fold stratified cross-validation (RGB)
 thermal_cross_validate.py         # 5-fold stratified cross-validation (thermal)
 fused_cross_validate.py           # 5-fold stratified cross-validation (late fusion)
 fused_train.py                    # late fusion training entry point
+run_alignment.py                  # alignment CLI (homography + frame matching)
 labels.csv                        # 550 tracklet labels (19 videos, 4 classes)
 videos/                           # symlinks to experiment videos in ~/Downloads/
 det2_model/                       # frozen Detectron2 model (config.yaml + model_best.pth)
@@ -114,6 +124,45 @@ MATERIAL_CLASSIFIER_SPEC.md       # authoritative spec (module code, hyperparame
 ```
 
 ## Commands
+
+### Alignment (Homography + Frame Matching)
+
+Computes the RGB-to-thermal homography matrix and temporal frame matching for each experiment. These are prerequisites for the thermal pipeline.
+
+```bash
+# Compute homography for a single experiment
+python run_alignment.py homography --experiment 0798
+
+# Compute homography for all experiments
+python run_alignment.py homography --all
+
+# Run frame matching for an experiment
+python run_alignment.py match --experiment 0798
+
+# Run frame matching for a subset of frames
+python run_alignment.py match --experiment 0798 --start-frame 2400 --stop-frame 2450
+
+# Run frame matching for all experiments
+python run_alignment.py match --all
+
+# Resume an interrupted matching run
+python run_alignment.py resume --csv path/to/partial.csv --stop-frame 10000
+```
+
+**What it does:**
+- **Homography:** Extracts registration frames from EO and thermal videos, computes a 3x3 homography via SuperPoint-SuperGlue + RANSAC, saves as `H_{exp_id}.joblib`
+- **Frame matching:** For each frame in the warped RGB video, finds the best-matching thermal frame using SuperGlue feature distances within a sliding search window. Saves results as `frame_matches_*.csv`
+
+**Alignment parameters** (configured in `material_classifier/config/alignment.yaml`):
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `matcher.match_threshold` | 0.2 | SuperGlue match confidence threshold |
+| `matcher.use_gpu` | true | GPU acceleration for feature matching |
+| `frame_matching.initial_window_length` | 20 | Initial search window half-width |
+| `frame_matching.max_window_length` | 200 | Maximum search window half-width |
+| `frame_matching.adaptive_window` | false | Dynamically adjust window based on SNR/gradient |
+| `frame_matching.best_percent` | 50 | Percentage of best matches for distance calculation |
+| `frame_matching.save_interval` | 50 | Checkpoint every N frames |
 
 ### Detection + Tracking
 
@@ -338,6 +387,13 @@ python material_classifier/inference.py \
 9. **Cross-validate** — run `cross_validate.py` for 5-fold stratified CV
 10. **Infer** — run `inference.py --video --checkpoint` for end-to-end prediction
 
+### Alignment Pipeline
+Computes spatial (homography) and temporal (frame matching) alignment between RGB and thermal video streams. Must run before the thermal pipeline for new experiments.
+
+1. **Compute homography** — run `run_alignment.py homography --experiment XXXX` (or `--all`) to compute and save `H_{exp_id}.joblib`
+2. **Generate warped RGB video** — use the homography to warp the full RGB video into thermal space (done externally, produces `IMG_XXXX_synched_warped.mp4`)
+3. **Match frames** — run `run_alignment.py match --experiment XXXX` (or `--all`) to find temporal correspondences between warped RGB and thermal frames
+
 ### Thermal Pipeline
 Uses the same tracklets (detection + tracking from RGB) but extracts features from thermal frames instead. Requires per-experiment thermal data: thermal frame PNGs, homography matrix, and RGB-to-thermal frame matching CSV in `~/Downloads/{exp_id}/`.
 
@@ -449,7 +505,8 @@ The `--video-dir` flag in `inference.py` auto-discovers this pattern. The `video
 - DINOv2 via torch.hub
 - Detectron2 (Mask R-CNN)
 - OC-SORT for multi-object tracking
-- OpenCV, Pillow, NumPy, SciPy, scikit-learn, matplotlib, PyYAML, tqdm
+- SuperPoint-SuperGlue via `superpoint-superglue-deployment` (alignment pipeline)
+- OpenCV, Pillow, NumPy, SciPy, scikit-learn, matplotlib, PyYAML, tqdm, joblib
 - Conda environment: `mwc`
 
 ## Reference

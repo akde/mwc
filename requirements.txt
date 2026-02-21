@@ -8,5 +8,7 @@ tqdm
 scikit-learn
 matplotlib
 scipy
+joblib
+superpoint-superglue-deployment
 # detectron2 must be installed separately:
 # python -m pip install detectron2 -f https://dl.fbaipublicmodels.com/detectron2/wheels/cu118/torch2.1/index.html
